@@ -24,7 +24,7 @@ jobs:
           pip install pyinstaller pytest
 
       - name: Test
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Build
         run: |
