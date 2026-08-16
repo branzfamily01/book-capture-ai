@@ -175,7 +175,9 @@ def build_outputs(
 
     if make_image_pdf:
         p = session_dir / f"{base_name}.pdf"
-        make_image_pdf(image_dir, p, progress=progress)
+        # The boolean argument above intentionally keeps the public API name;
+        # resolve the generator explicitly so it cannot shadow the function.
+        globals()["make_image_pdf"](image_dir, p, progress=progress)
         outputs.append(p)
 
     if make_ocr_pdf or make_txt:
