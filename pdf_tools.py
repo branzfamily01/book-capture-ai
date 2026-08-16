@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
+import sys
+from io import BytesIO
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 
 from PIL import Image
+
+
+ProgressCallback = Optional[Callable[[int, int, str], None]]
 
 
 def sanitize_filename(name: str) -> str:
@@ -17,53 +23,122 @@ def _images(image_dir: Path):
     return sorted(image_dir.glob("page-*.png"))
 
 
-def make_image_pdf(image_dir: Path, out_path: Path):
+def app_directory() -> Path:
+    """Directory beside the executable in frozen builds, otherwise source directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def bundled_ocr_directory() -> Path:
+    return app_directory() / "ocr"
+
+
+def configure_tesseract() -> dict:
+    """Prefer the bundled OCR runtime and fall back to a system installation."""
+    import pytesseract
+
+    ocr_dir = bundled_ocr_directory()
+    bundled_exe = ocr_dir / "tesseract.exe"
+    source = "system"
+
+    if bundled_exe.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(bundled_exe)
+        # Tesseract resolves language files at TESSDATA_PREFIX/tessdata/*.traineddata.
+        os.environ["TESSDATA_PREFIX"] = str(ocr_dir)
+        source = "bundled"
+
+    try:
+        version = str(pytesseract.get_tesseract_version())
+        langs = sorted(pytesseract.get_languages(config=""))
+        return {
+            "available": True,
+            "source": source,
+            "version": version,
+            "languages": langs,
+            "executable": str(getattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")),
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "source": source,
+            "version": None,
+            "languages": [],
+            "executable": str(bundled_exe if bundled_exe.exists() else "tesseract"),
+            "error": str(exc),
+        }
+
+
+def tesseract_available(required_languages=None) -> bool:
+    info = configure_tesseract()
+    if not info["available"]:
+        return False
+    if required_languages:
+        needed = set(required_languages)
+        return needed.issubset(set(info["languages"]))
+    return True
+
+
+def make_image_pdf(image_dir: Path, out_path: Path, progress: ProgressCallback = None):
     """Create an image-only PDF without holding every decoded page in RAM."""
     files = _images(image_dir)
     if not files:
         raise RuntimeError("PDFにできる画像がありません。")
     import img2pdf
+    if progress:
+        progress(0, len(files), "画像PDFを作成中")
     with open(out_path, "wb") as f:
         img2pdf.convert([str(p) for p in files], outputstream=f)
+    if progress:
+        progress(len(files), len(files), "画像PDFを作成しました")
 
 
-def tesseract_available():
-    try:
-        import pytesseract
-        pytesseract.get_tesseract_version()
-        return True
-    except Exception:
-        return False
+def make_ocr_outputs(
+    image_dir: Path,
+    pdf_path: Path | None,
+    txt_path: Path | None,
+    lang: str,
+    progress: ProgressCallback = None,
+):
+    required = [x for x in lang.split("+") if x]
+    info = configure_tesseract()
+    if not info["available"]:
+        raise RuntimeError("内蔵OCRを起動できません。配布ファイルが壊れている可能性があります。")
 
-
-def make_ocr_outputs(image_dir: Path, pdf_path: Path | None, txt_path: Path | None, lang: str):
-    if not tesseract_available():
-        raise RuntimeError(
-            "Tesseract OCR が見つかりません。OCR出力を使う場合は Tesseract をインストールし、"
-            "日本語言語データを追加してください。画像PDFはOCRなしで作成できます。"
-        )
+    missing = sorted(set(required) - set(info["languages"]))
+    if missing:
+        raise RuntimeError("OCR言語データがありません: " + ", ".join(missing))
 
     import pytesseract
     from pypdf import PdfReader, PdfWriter
-    from io import BytesIO
 
     files = _images(image_dir)
     writer = PdfWriter() if pdf_path else None
     text_parts = []
+    total = len(files)
 
     for idx, path in enumerate(files, start=1):
+        if progress:
+            progress(idx - 1, total, f"OCR {idx}/{total}ページ")
         img = Image.open(path)
         try:
+            # tessdata_fast requires the LSTM OCR engine (--oem 1).
+            config = "--oem 1"
             if pdf_path:
-                page_pdf = pytesseract.image_to_pdf_or_hocr(img, extension="pdf", lang=lang)
+                page_pdf = pytesseract.image_to_pdf_or_hocr(
+                    img, extension="pdf", lang=lang, config=config
+                )
                 reader = PdfReader(BytesIO(page_pdf))
                 for page in reader.pages:
                     writer.add_page(page)
             if txt_path:
-                text = pytesseract.image_to_string(img, lang=lang)
+                text = pytesseract.image_to_string(img, lang=lang, config=config)
                 text_parts.append(f"\n\n===== PAGE {idx} =====\n\n{text.strip()}")
         finally:
             img.close()
+
+        if progress:
+            progress(idx, total, f"OCR {idx}/{total}ページ")
 
     if pdf_path and writer:
         with open(pdf_path, "wb") as f:
@@ -80,20 +155,26 @@ def build_outputs(
     make_ocr_pdf: bool = False,
     make_txt: bool = False,
     ocr_lang: str = "jpn+eng",
+    progress: ProgressCallback = None,
 ) -> List[Path]:
     session_dir = image_dir.parent
     outputs = []
 
     if make_image_pdf:
         p = session_dir / f"{base_name}.pdf"
-        make_image_pdf_fn = globals()["make_image_pdf"]
-        make_image_pdf_fn(image_dir, p)
+        make_image_pdf(image_dir, p, progress=progress)
         outputs.append(p)
 
     if make_ocr_pdf or make_txt:
         pdf_path = session_dir / f"{base_name}-searchable.pdf" if make_ocr_pdf else None
         txt_path = session_dir / f"{base_name}.txt" if make_txt else None
-        make_ocr_outputs(image_dir, pdf_path, txt_path, ocr_lang)
+        make_ocr_outputs(
+            image_dir,
+            pdf_path,
+            txt_path,
+            ocr_lang,
+            progress=progress,
+        )
         if pdf_path:
             outputs.append(pdf_path)
         if txt_path:
