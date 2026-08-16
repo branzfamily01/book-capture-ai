@@ -44,13 +44,24 @@ def configure_tesseract() -> dict:
 
     if bundled_exe.exists():
         pytesseract.pytesseract.tesseract_cmd = str(bundled_exe)
-        # Tesseract resolves language files at TESSDATA_PREFIX/tessdata/*.traineddata.
+        # This bundle stores language data in ocr/tessdata/*.traineddata.
         os.environ["TESSDATA_PREFIX"] = str(ocr_dir)
         source = "bundled"
 
     try:
         version = str(pytesseract.get_tesseract_version())
-        langs = sorted(pytesseract.get_languages(config=""))
+
+        if source == "bundled":
+            # Do not use pytesseract.get_languages() here. pytesseract caches that
+            # result, so an early lookup can leave a stale empty list even after
+            # TESSDATA_PREFIX is configured. The bundle contents are authoritative.
+            tessdata_dir = ocr_dir / "tessdata"
+            langs = sorted(
+                path.stem for path in tessdata_dir.glob("*.traineddata") if path.is_file()
+            )
+        else:
+            langs = sorted(pytesseract.get_languages(config=""))
+
         return {
             "available": True,
             "source": source,
