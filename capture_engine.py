@@ -85,15 +85,54 @@ class CaptureEngine:
         windows = gw.getWindowsWithTitle(self.config.window_title)
         if not windows:
             raise RuntimeError(f"対象ウィンドウが見つかりません: {self.config.window_title}")
+
         win = windows[0]
-        try:
-            if win.isMinimized:
-                win.restore()
-                time.sleep(0.2)
-            win.activate()
-            time.sleep(0.12)
-        except Exception as e:
-            self.log(f"警告: ウィンドウのアクティブ化に失敗しました: {e}")
+        hwnd = getattr(win, "_hWnd", None)
+        last_error = None
+
+        for attempt in range(1, 4):
+            try:
+                if win.isMinimized:
+                    win.restore()
+                    time.sleep(0.2)
+                win.activate()
+            except Exception as e:
+                last_error = e
+
+            time.sleep(0.18)
+
+            if hwnd:
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    if user32.GetForegroundWindow() == hwnd:
+                        return
+
+                    SW_RESTORE = 9
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    time.sleep(0.18)
+                    if user32.GetForegroundWindow() == hwnd:
+                        return
+                except Exception as e:
+                    last_error = e
+            else:
+                try:
+                    active = gw.getActiveWindow()
+                    if active and active.title == win.title:
+                        return
+                except Exception as e:
+                    last_error = e
+
+            self.log(f"対象ウィンドウ切替を再試行しています ({attempt}/3)")
+
+        detail = f" ({last_error})" if last_error else ""
+        raise RuntimeError(
+            "対象の電子書籍ウィンドウを前面にできませんでした。"
+            "誤って別アプリへページ送りキーを送らないため処理を停止します。"
+            + detail
+        )
 
     def capture(self, sct: mss.mss) -> Image.Image:
         x, y, w, h = self.config.region
