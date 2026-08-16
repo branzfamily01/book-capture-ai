@@ -45,21 +45,16 @@ jobs:
             -Uri "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
             -OutFile $installer
 
-          $args = @(
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/SP-",
-            "/DIR=$installDir"
-          )
-          $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Tesseract installer failed: $($p.ExitCode)" }
-          if (-not (Test-Path (Join-Path $installDir "tesseract.exe"))) {
-            throw "Tesseract executable was not installed"
-          }
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+          & 7z x $installer "-o$installDir" -y | Write-Output
+          if ($LASTEXITCODE -ne 0) { throw "Could not extract Tesseract Windows package" }
+
+          $tesseractExe = Get-ChildItem -Path $installDir -Filter "tesseract.exe" -Recurse | Select-Object -First 1
+          if (-not $tesseractExe) { throw "tesseract.exe was not found after extraction" }
+          $runtimeDir = $tesseractExe.Directory.FullName
 
           New-Item -ItemType Directory -Force -Path $ocrDir | Out-Null
-          Copy-Item -Path (Join-Path $installDir "*") -Destination $ocrDir -Recurse -Force
+          Copy-Item -Path (Join-Path $runtimeDir "*") -Destination $ocrDir -Recurse -Force
           New-Item -ItemType Directory -Force -Path (Join-Path $ocrDir "tessdata") | Out-Null
 
           $models = @("eng", "jpn", "jpn_vert", "osd")
