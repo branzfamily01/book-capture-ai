@@ -32,16 +32,20 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app.py
 
-      - name: Smoke-test packaged EXE startup
+      - name: Self-test packaged EXE
         shell: pwsh
         run: |
+          $report = Join-Path $PWD "selftest.json"
           $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
-          $p = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 5
-          if ($p.HasExited) {
-            throw "Packaged EXE exited during startup smoke test. ExitCode=$($p.ExitCode)"
+          $p = Start-Process -FilePath $exe -ArgumentList @("--self-test", $report) -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $report) { Get-Content $report }
+            throw "Packaged EXE self-test failed. ExitCode=$($p.ExitCode)"
           }
-          Stop-Process -Id $p.Id -Force
+          if (-not (Test-Path $report)) { throw "Self-test report missing" }
+          Get-Content $report
+          $json = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $json.ok) { throw "Self-test returned ok=false" }
 
       - name: Verify package contents
         shell: pwsh
