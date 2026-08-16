@@ -10,8 +10,9 @@ BOOK CAPTURE AI - FIRST RUN
 8. A PDF is created in the chosen output folder.
 
 OCR:
-- Normal image PDF works without Tesseract.
-- Searchable PDF/TXT needs Tesseract OCR + Japanese language data.
+- Tesseract OCR + Japanese/English language data are bundled in the Windows package.
+- No separate OCR installation is required.
+- OCR runs locally on this PC.
 
 Safety / rights:
 - This app does not remove DRM or bypass screenshot protection.
