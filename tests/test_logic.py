@@ -37,6 +37,30 @@ def test_image_pdf_generation_is_multipage(tmp_path):
     assert len(PdfReader(str(out)).pages) == 20
 
 
+def test_build_outputs_creates_image_pdf(tmp_path):
+    from pypdf import PdfReader
+    from pdf_tools import build_outputs
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    for i in range(1, 6):
+        Image.new("RGB", (320, 480), "white").save(
+            image_dir / f"page-{i:04d}.png"
+        )
+
+    outputs = build_outputs(
+        image_dir=image_dir,
+        base_name="book",
+        make_image_pdf=True,
+        make_ocr_pdf=False,
+        make_txt=False,
+    )
+    pdf_path = tmp_path / "book.pdf"
+    assert pdf_path in outputs
+    assert pdf_path.exists()
+    assert len(PdfReader(str(pdf_path)).pages) == 5
+
+
 def test_dpi_region_conversion_150_percent():
     assert logical_rect_to_native_region(
         (100, 120, 800, 1000),
