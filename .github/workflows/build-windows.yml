@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows EXE with bundled OCR
 
 on:
   workflow_dispatch:
@@ -26,11 +26,100 @@ jobs:
       - name: Test source
         env:
           PYTHONPATH: ${{ github.workspace }}
+          QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
 
       - name: Build EXE
         run: |
           pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app.py
+
+      - name: Bundle Tesseract OCR
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Join-Path $env:RUNNER_TEMP "tesseract-installer.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "Tesseract-OCR"
+          $ocrDir = Join-Path $PWD "dist/BookCaptureAI/ocr"
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.0/tesseract-ocr-w64-setup-5.5.0.20241111.exe" `
+            -OutFile $installer
+
+          $args = @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installDir"
+          )
+          $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Tesseract installer failed: $($p.ExitCode)" }
+          if (-not (Test-Path (Join-Path $installDir "tesseract.exe"))) {
+            throw "Tesseract executable was not installed"
+          }
+
+          New-Item -ItemType Directory -Force -Path $ocrDir | Out-Null
+          Copy-Item -Path (Join-Path $installDir "*") -Destination $ocrDir -Recurse -Force
+          New-Item -ItemType Directory -Force -Path (Join-Path $ocrDir "tessdata") | Out-Null
+
+          $models = @("eng", "jpn", "jpn_vert", "osd")
+          foreach ($model in $models) {
+            Invoke-WebRequest `
+              -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$model.traineddata" `
+              -OutFile (Join-Path $ocrDir "tessdata/$model.traineddata")
+          }
+
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE" `
+            -OutFile (Join-Path $ocrDir "LICENSE-Tesseract.txt")
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/LICENSE" `
+            -OutFile (Join-Path $ocrDir "LICENSE-tessdata_fast.txt")
+          Copy-Item "THIRD-PARTY-NOTICES.md" (Join-Path $ocrDir "THIRD-PARTY-NOTICES.md")
+
+          & (Join-Path $ocrDir "tesseract.exe") --version
+          $langs = & (Join-Path $ocrDir "tesseract.exe") --list-langs 2>&1
+          $langs | Write-Output
+          foreach ($requiredLang in @("eng", "jpn", "jpn_vert")) {
+            if ($langs -notcontains $requiredLang) { throw "Missing OCR language: $requiredLang" }
+          }
+
+      - name: Test OCR integration
+        shell: pwsh
+        run: |
+          Copy-Item "dist/BookCaptureAI/ocr" "ocr" -Recurse -Force
+          @'
+          from pathlib import Path
+          import os
+          from PIL import Image, ImageDraw, ImageFont
+          from pypdf import PdfReader
+          from pdf_tools import configure_tesseract, make_ocr_outputs
+
+          base = Path("ocr-integration-test")
+          image_dir = base / "images"
+          image_dir.mkdir(parents=True, exist_ok=True)
+          image = Image.new("RGB", (1400, 260), "white")
+          draw = ImageDraw.Draw(image)
+          font_path = Path(os.environ["WINDIR"]) / "Fonts" / "arial.ttf"
+          font = ImageFont.truetype(str(font_path), 78)
+          draw.text((40, 60), "BOOK CAPTURE OCR TEST 12345", fill="black", font=font)
+          image.save(image_dir / "page-0001.png")
+
+          info = configure_tesseract()
+          assert info["available"], info
+          assert info["source"] == "bundled", info
+          assert {"eng", "jpn", "jpn_vert"}.issubset(set(info["languages"])), info
+
+          searchable = base / "searchable.pdf"
+          text_file = base / "text.txt"
+          make_ocr_outputs(image_dir, searchable, text_file, "eng")
+          assert searchable.exists() and len(PdfReader(str(searchable)).pages) == 1
+          text = text_file.read_text(encoding="utf-8")
+          assert "12345" in text, text
+          print(info)
+          print(text)
+          '@ | python -
+          Remove-Item "ocr" -Recurse -Force
 
       - name: Self-test packaged EXE
         shell: pwsh
@@ -50,11 +139,23 @@ jobs:
       - name: Verify package contents
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist/BookCaptureAI/BookCaptureAI.exe")) { throw "EXE missing" }
-          if (-not (Test-Path "dist/BookCaptureAI/_internal")) { throw "PyInstaller runtime missing" }
+          $root = "dist/BookCaptureAI"
+          $required = @(
+            "$root/BookCaptureAI.exe",
+            "$root/_internal",
+            "$root/ocr/tesseract.exe",
+            "$root/ocr/tessdata/jpn.traineddata",
+            "$root/ocr/tessdata/jpn_vert.traineddata",
+            "$root/ocr/tessdata/eng.traineddata",
+            "$root/ocr/LICENSE-Tesseract.txt",
+            "$root/ocr/LICENSE-tessdata_fast.txt"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path $item)) { throw "Missing package item: $item" }
+          }
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.2
+          name: BookCaptureAI-Windows-v0.3-OCR-Bundled
           path: dist/BookCaptureAI/
