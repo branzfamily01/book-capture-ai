@@ -44,7 +44,6 @@ def list_windows(exclude_contains=None) -> List[str]:
 
 
 def image_difference_score(a: Image.Image, b: Image.Image) -> float:
-    # Small grayscale preview keeps the comparison fast and robust.
     a = a.convert("L").resize((240, 240))
     b = b.convert("L").resize((240, 240))
     diff = ImageChops.difference(a, b)
@@ -105,6 +104,32 @@ class CaptureEngine:
         path = image_dir / f"page-{index:04d}.png"
         img.save(path, "PNG", optimize=True)
         return path
+
+    def wait_for_stable_frame(self, sct: mss.mss) -> Image.Image:
+        """Wait for page-turn animation/rendering to settle before saving."""
+        time.sleep(self.config.settle_delay)
+        previous = self.capture(sct)
+        stable_hits = 0
+        stability_threshold = max(0.35, self.config.diff_threshold * 0.25)
+        deadline = time.time() + max(1.0, self.config.change_timeout)
+
+        while time.time() < deadline and not self._stop.is_set():
+            self.wait_if_paused()
+            time.sleep(0.12)
+            current = self.capture(sct)
+            motion = image_difference_score(previous, current)
+
+            if motion <= stability_threshold:
+                stable_hits += 1
+                if stable_hits >= 2:
+                    return current
+            else:
+                stable_hits = 0
+
+            previous = current
+
+        self.log("警告: ページ表示の完全な安定を確認できなかったため、最新フレームを保存します。")
+        return previous
 
     def run(self):
         output_dir = Path(self.config.output_dir)
@@ -182,9 +207,7 @@ class CaptureEngine:
                         break
                     continue
 
-                # Give animations / page rendering time to settle, then capture the final frame.
-                time.sleep(self.config.settle_delay)
-                stable = self.capture(sct)
+                stable = self.wait_for_stable_frame(sct)
                 final_score = image_difference_score(prev, stable)
 
                 if final_score < self.config.diff_threshold:
