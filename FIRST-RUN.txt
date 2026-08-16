@@ -1,0 +1,18 @@
+BOOK CAPTURE AI - FIRST RUN
+
+1. Open Kindle / an ebook reader / browser on Windows.
+2. Run BookCaptureAI.exe.
+3. Click "ウィンドウ更新" and choose the ebook window.
+4. Click "画面範囲を選択" and drag around only the book page.
+5. Choose the page-turn key (Kindle is often ← or → depending on layout).
+6. Click "キャプチャ開始".
+7. The app stops automatically when the same screen repeats, or at the max page count.
+8. A PDF is created in the chosen output folder.
+
+OCR:
+- Normal image PDF works without Tesseract.
+- Searchable PDF/TXT needs Tesseract OCR + Japanese language data.
+
+Safety / rights:
+- This app does not remove DRM or bypass screenshot protection.
+- Use only for content and purposes you are authorized to copy.
