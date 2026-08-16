@@ -24,8 +24,8 @@ Windows向けのローカル電子書籍キャプチャ支援アプリです。
 - 一時停止 / 再開 / 手動終了
 - PNG保存
 - 画像PDF生成
-- 任意で検索可能PDF生成
-- 任意でOCRテキスト生成
+- 内蔵OCRで検索可能PDF生成
+- 内蔵OCRでOCRテキスト生成
 - 設定値の保持
 
 ## 使い方
@@ -41,12 +41,13 @@ Windows向けのローカル電子書籍キャプチャ支援アプリです。
 
 ## OCRについて
 
-画像PDFは追加ソフト不要で作れます。
+Windows配布版には **Tesseract OCR と日本語・英語モデルを同梱**しています。
+Tesseractを別途インストールする必要はありません。
 
-検索可能PDF / TXTを作る場合は、Windowsに **Tesseract OCR** をインストールし、
-日本語を使う場合は `jpn.traineddata` を追加してください。
+- `jpn+eng`: 日本語横書き＋英語（標準）
+- `jpn_vert+eng`: 日本語縦書き＋英語（必要な場合に指定）
 
-OCR言語の標準値は `jpn+eng` です。
+OCRはローカルPC内で処理し、OCRのための外部サーバー送信は行いません。
 
 ## 開発環境から起動
 
@@ -77,7 +78,7 @@ dist/BookCaptureAI/
 `.github/workflows/build-windows.yml` を含めています。
 
 GitHubにpushするとWindows runner上でビルドし、ActionsのArtifactsから
-`BookCaptureAI-windows.zip` を取得できます。
+`BookCaptureAI-Windows-v0.3-OCR-Bundled` を取得できます。
 
 ## 既知の制約
 
