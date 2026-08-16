@@ -1,6 +1,7 @@
 from PIL import Image
 from capture_engine import image_difference_score
 from pdf_tools import sanitize_filename
+from app import logical_rect_to_native_region
 
 
 def test_same_image_score_is_zero():
@@ -34,3 +35,19 @@ def test_image_pdf_generation_is_multipage(tmp_path):
     make_image_pdf(image_dir, out)
     assert out.exists()
     assert len(PdfReader(str(out)).pages) == 20
+
+
+def test_dpi_region_conversion_150_percent():
+    assert logical_rect_to_native_region(
+        (100, 120, 800, 1000),
+        (0, 0, 1280, 720),
+        1.5,
+    ) == (150, 180, 1200, 1500)
+
+
+def test_dpi_region_conversion_secondary_screen_origin_is_preserved():
+    assert logical_rect_to_native_region(
+        (2000, 100, 400, 300),
+        (1920, 0, 1280, 720),
+        1.25,
+    ) == (2020, 125, 500, 375)
