@@ -44,8 +44,10 @@ def configure_tesseract() -> dict:
 
     if bundled_exe.exists():
         pytesseract.pytesseract.tesseract_cmd = str(bundled_exe)
-        # This bundle stores language data in ocr/tessdata/*.traineddata.
-        os.environ["TESSDATA_PREFIX"] = str(ocr_dir)
+        # Tesseract expects TESSDATA_PREFIX to point directly at the directory
+        # containing *.traineddata for normal OCR invocation.
+        tessdata_dir = ocr_dir / "tessdata"
+        os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
         source = "bundled"
 
     try:
