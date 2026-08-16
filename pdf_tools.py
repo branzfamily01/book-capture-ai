@@ -18,16 +18,13 @@ def _images(image_dir: Path):
 
 
 def make_image_pdf(image_dir: Path, out_path: Path):
+    """Create an image-only PDF without holding every decoded page in RAM."""
     files = _images(image_dir)
     if not files:
         raise RuntimeError("PDFにできる画像がありません。")
-    images = [Image.open(p).convert("RGB") for p in files]
-    try:
-        first, rest = images[0], images[1:]
-        first.save(out_path, "PDF", resolution=150.0, save_all=True, append_images=rest)
-    finally:
-        for img in images:
-            img.close()
+    import img2pdf
+    with open(out_path, "wb") as f:
+        img2pdf.convert([str(p) for p in files], outputstream=f)
 
 
 def tesseract_available():

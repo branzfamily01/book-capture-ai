@@ -5,3 +5,4 @@ PyAutoGUI>=0.9.54
 PyGetWindow>=0.0.9
 pytesseract>=0.3.13
 pypdf>=5.0
+img2pdf>=0.6.1

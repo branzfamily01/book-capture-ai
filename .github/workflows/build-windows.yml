@@ -23,20 +23,34 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller pytest
 
-      - name: Test
+      - name: Test source
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: python -m pytest -q
 
-      - name: Build
+      - name: Build EXE
         run: |
           pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app.py
 
-      - name: Package
+      - name: Smoke-test packaged EXE startup
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/BookCaptureAI/*" -DestinationPath "BookCaptureAI-windows.zip"
+          $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 5
+          if ($p.HasExited) {
+            throw "Packaged EXE exited during startup smoke test. ExitCode=$($p.ExitCode)"
+          }
+          Stop-Process -Id $p.Id -Force
 
-      - name: Upload artifact
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/BookCaptureAI/BookCaptureAI.exe")) { throw "EXE missing" }
+          if (-not (Test-Path "dist/BookCaptureAI/_internal")) { throw "PyInstaller runtime missing" }
+
+      - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-windows
-          path: BookCaptureAI-windows.zip
+          name: BookCaptureAI-Windows-v0.2
+          path: dist/BookCaptureAI/
