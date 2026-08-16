@@ -16,11 +16,23 @@ from PySide6.QtWidgets import (
 )
 
 from capture_engine import CaptureConfig, CaptureEngine, list_windows
-from pdf_tools import build_outputs, sanitize_filename
+from pdf_tools import build_outputs, sanitize_filename, tesseract_available
 
 
 APP_NAME = "Book Capture AI"
 ORG_NAME = "LocalTools"
+
+
+def logical_rect_to_native_region(rect, screen_geometry, dpr):
+    """Convert a Qt logical-pixel rectangle to Windows/native pixel coordinates."""
+    rx, ry, rw, rh = rect
+    sx, sy, sw, sh = screen_geometry
+    return (
+        int(round(sx + (rx - sx) * dpr)),
+        int(round(sy + (ry - sy) * dpr)),
+        max(1, int(round(rw * dpr))),
+        max(1, int(round(rh * dpr))),
+    )
 
 
 class RegionSelector(QWidget):
@@ -76,9 +88,20 @@ class RegionSelector(QWidget):
             self.current = event.position().toPoint()
             rect = QRect(self.origin, self.current).normalized()
             if rect.width() >= 50 and rect.height() >= 50:
-                x = rect.x() + self.virtual_geo.x()
-                y = rect.y() + self.virtual_geo.y()
-                self.region_selected.emit((x, y, rect.width(), rect.height()))
+                logical_x = rect.x() + self.virtual_geo.x()
+                logical_y = rect.y() + self.virtual_geo.y()
+                logical_rect = QRect(logical_x, logical_y, rect.width(), rect.height())
+
+                screen = QGuiApplication.screenAt(logical_rect.center())
+                if screen is not None:
+                    sg = screen.geometry()
+                    clipped = logical_rect.intersected(sg)
+                    native = logical_rect_to_native_region(
+                        (clipped.x(), clipped.y(), clipped.width(), clipped.height()),
+                        (sg.x(), sg.y(), sg.width(), sg.height()),
+                        float(screen.devicePixelRatio()),
+                    )
+                    self.region_selected.emit(native)
             self.close()
 
     def keyPressEvent(self, event):
@@ -311,7 +334,7 @@ class MainWindow(QMainWindow):
 
     def update_region_label(self):
         x, y, w, h = self.region
-        self.region_label.setText(f"x={x}, y={y}, {w}×{h}")
+        self.region_label.setText(f"x={x}, y={y}, {w}×{h} px")
 
     def select_region(self):
         self.hide()
@@ -443,12 +466,19 @@ class MainWindow(QMainWindow):
         self.append_log(f"キャプチャ完了: {result['pages']}ページ")
         self.status_label.setText("PDF/OCR生成中…")
         try:
+            wants_ocr = self.make_ocr_pdf.isChecked() or self.make_txt.isChecked()
+            ocr_ready = tesseract_available() if wants_ocr else True
+            if wants_ocr and not ocr_ready:
+                self.append_log(
+                    "OCRはスキップしました: Tesseract OCRが見つかりません。画像PDFは作成します。"
+                )
+
             outputs = build_outputs(
                 image_dir=Path(result["image_dir"]),
                 base_name=sanitize_filename(self.book_title.text().strip() or "captured-book"),
                 make_image_pdf=self.make_pdf.isChecked(),
-                make_ocr_pdf=self.make_ocr_pdf.isChecked(),
-                make_txt=self.make_txt.isChecked(),
+                make_ocr_pdf=self.make_ocr_pdf.isChecked() and ocr_ready,
+                make_txt=self.make_txt.isChecked() and ocr_ready,
                 ocr_lang=self.ocr_lang.text().strip() or "jpn+eng",
             )
             for item in outputs:
@@ -458,7 +488,7 @@ class MainWindow(QMainWindow):
                 self, APP_NAME,
                 "処理が完了しました。\n\n" + "\n".join(str(x) for x in outputs)
             )
-        except Exception as e:
+        except Exception:
             self.on_failed(traceback.format_exc())
         finally:
             self.reset_buttons()
@@ -483,7 +513,76 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def run_self_test(output_path: str) -> int:
+    """Exercise bundled dependencies, PDF generation and a headless Qt window."""
+    import json
+    import tempfile
+    from PIL import Image
+    from pypdf import PdfReader
+
+    report = {
+        "ok": False,
+        "checks": {},
+        "python": sys.version,
+    }
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="bookcapture-selftest-") as td:
+            base = Path(td)
+            image_dir = base / "images"
+            image_dir.mkdir()
+
+            for i in range(1, 13):
+                img = Image.new("RGB", (900, 1200), "white")
+                img.save(image_dir / f"page-{i:04d}.png", "PNG")
+
+            outputs = build_outputs(
+                image_dir=image_dir,
+                base_name="self-test",
+                make_image_pdf=True,
+                make_ocr_pdf=False,
+                make_txt=False,
+            )
+            pdf_file = base / "self-test.pdf"
+            reader = PdfReader(str(pdf_file))
+            report["checks"]["pdf_exists"] = pdf_file.exists()
+            report["checks"]["pdf_pages"] = len(reader.pages)
+            report["checks"]["window_enumeration"] = isinstance(list_windows(), list)
+
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+            qt_app = QApplication.instance() or QApplication([])
+            win = MainWindow()
+            report["checks"]["mainwindow_constructed"] = bool(win.windowTitle())
+            win.close()
+            qt_app.processEvents()
+
+            report["ok"] = (
+                report["checks"]["pdf_exists"]
+                and report["checks"]["pdf_pages"] == 12
+                and report["checks"]["window_enumeration"]
+                and report["checks"]["mainwindow_constructed"]
+            )
+            report["outputs"] = [str(x) for x in outputs]
+
+    except Exception:
+        report["error"] = traceback.format_exc()
+
+    Path(output_path).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return 0 if report["ok"] else 1
+
+
 def main():
+    if "--self-test" in sys.argv:
+        idx = sys.argv.index("--self-test")
+        output_path = (
+            sys.argv[idx + 1]
+            if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--")
+            else str(Path.cwd() / "bookcapture-selftest.json")
+        )
+        raise SystemExit(run_self_test(output_path))
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     win = MainWindow()
