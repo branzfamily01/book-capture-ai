@@ -1,4 +1,4 @@
-BOOK CAPTURE AI v0.4 - FIRST RUN
+BOOK CAPTURE AI v0.5 - FIRST RUN
 
 1. Open Kindle for Web / an ebook reader / browser on Windows.
 2. Run BookCaptureAI.exe.
@@ -7,20 +7,28 @@ BOOK CAPTURE AI v0.4 - FIRST RUN
 5. Choose the page-turn key (Kindle is often ← or → depending on layout).
 6. For a two-page spread, keep "見開きを中央から2ページに自動分割する" ON.
 7. Japanese books: use "右 → 左". Western/left-to-right books: use "左 → 右".
-8. Click "キャプチャ開始".
-9. Original spread screenshots stay in images/.
-10. Split single-page images are saved in images-split/.
-11. PDF / searchable PDF / OCR TXT are generated from the split pages when split mode is ON.
+8. Keep "上部のKindleヘッダーを除去" ON. Default 8%.
+9. Keep "下部のKindleフッターを除去" ON. Default 6%.
+10. Click "キャプチャ開始".
+11. Original screenshots always remain untouched in images/.
+12. Clean split pages are saved in images-split/.
+13. PDF / searchable PDF / OCR TXT are generated from the clean pages.
+
+If using a normal one-page Kindle view:
+- Turn spread split OFF.
+- Header/footer removal can remain ON.
+- Clean pages are saved in images-clean/.
 
 OCR:
-- Tesseract OCR + Japanese/English language data are bundled in the Windows package.
+- Tesseract OCR + Japanese/English language data are bundled.
 - No separate OCR installation is required.
 - OCR runs locally on this PC.
 
-Notes:
-- Split mode currently divides at the exact center of the selected capture area.
-- For a normal one-page Kindle view, turn split mode OFF.
-- If a cover or chapter page occupies only one side, an extra blank/partial half may be created; the original spread is always preserved.
+Tuning:
+- If some Kindle header remains, increase the top percentage slightly.
+- If body text is cut off, decrease the top percentage.
+- If "読書速度を学習中…" or position/progress remains, increase the bottom percentage slightly.
+- Start with Top 8% / Bottom 6%.
 
 Safety / rights:
 - This app does not remove DRM or bypass screenshot protection.
