@@ -2,7 +2,7 @@ from PIL import Image
 from capture_engine import image_difference_score, virtual_key_for
 from pdf_tools import sanitize_filename
 from app import logical_rect_to_native_region
-from split_tools import split_spreads
+from split_tools import split_spreads, trim_pages
 
 
 def test_same_image_score_is_zero():
@@ -61,6 +61,53 @@ def test_split_spread_ltr_order(tmp_path):
     with Image.open(files[0]) as first, Image.open(files[1]) as second:
         assert first.getpixel((10, 10)) == (255, 0, 0)
         assert second.getpixel((10, 10)) == (0, 0, 255)
+
+
+def test_split_trims_header_and_footer_before_split(tmp_path):
+    src = tmp_path / "images"
+    out = tmp_path / "images-split"
+    src.mkdir()
+    img = Image.new("RGB", (1000, 1000), "white")
+    for y in range(80):
+        for x in range(1000):
+            img.putpixel((x, y), (255, 0, 0))
+    for y in range(940, 1000):
+        for x in range(1000):
+            img.putpixel((x, y), (0, 0, 255))
+    img.save(src / "page-0001.png")
+
+    files = split_spreads(src, out, order="rtl", top_crop_pct=8.0, bottom_crop_pct=6.0)
+    assert len(files) == 2
+    with Image.open(files[0]) as page:
+        assert page.size == (500, 860)
+        assert page.getpixel((10, 0)) == (255, 255, 255)
+        assert page.getpixel((10, page.height - 1)) == (255, 255, 255)
+
+
+def test_trim_pages_for_single_page_mode(tmp_path):
+    src = tmp_path / "images"
+    out = tmp_path / "images-clean"
+    src.mkdir()
+    img = Image.new("RGB", (600, 1000), "white")
+    img.save(src / "page-0001.png")
+
+    files = trim_pages(src, out, top_crop_pct=8.0, bottom_crop_pct=6.0)
+    assert len(files) == 1
+    with Image.open(files[0]) as page:
+        assert page.size == (600, 860)
+
+
+def test_invalid_crop_percentages_raise(tmp_path):
+    src = tmp_path / "images"
+    out = tmp_path / "images-clean"
+    src.mkdir()
+    Image.new("RGB", (100, 100), "white").save(src / "page-0001.png")
+    try:
+        trim_pages(src, out, top_crop_pct=60, bottom_crop_pct=40)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError")
 
 
 def test_image_pdf_generation_is_multipage(tmp_path):
