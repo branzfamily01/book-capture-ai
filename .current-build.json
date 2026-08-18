@@ -1,7 +1,7 @@
 {
-  "commit": "d1d06aa886d3451184d76d951a365efc44f6a6b5",
   "status": "running",
-  "artifact": "BookCaptureAI-Windows-v0.5.3-Sparse-Page-Guard",
-  "version": "0.5.3",
-  "run_id": 32142802837
+  "commit": "75df057585644a96c30e4513b64842b8a914eb09",
+  "artifact": "BookCaptureAI-Windows-v0.5.4-Global-Controls-Alerts",
+  "version": "0.5.4",
+  "run_id": 32146072416
 }
