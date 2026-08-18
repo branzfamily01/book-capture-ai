@@ -1,4 +1,4 @@
-name: Build Windows EXE v0.5.1 with responsive clean split UI
+name: Build Windows EXE v0.5.2 with responsive background OCR
 
 on:
   workflow_dispatch:
@@ -23,9 +23,9 @@ jobs:
         run: |
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5.2-Background-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.5.1"
+            version = "0.5.2"
             status = "running"
           } | ConvertTo-Json
           Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
@@ -51,6 +51,12 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
+
+      - name: Test post-processing QThread self-test
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_post_process.py
 
       - name: Build EXE
         run: |
@@ -159,7 +165,7 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
-          if ($json.version -ne "0.5.1") { throw "Wrong app version in self-test" }
+          if ($json.version -ne "0.5.2") { throw "Wrong app version in self-test" }
           if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
           if ($json.checks.clean_size[0] -ne 500 -or $json.checks.clean_size[1] -ne 860) { throw "Trim size self-test failed" }
           if ($json.checks.pdf_pages -ne 12) { throw "Clean split PDF page count failed" }
@@ -187,7 +193,7 @@ jobs:
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR
+          name: BookCaptureAI-Windows-v0.5.2-Background-OCR
           path: dist/BookCaptureAI/
 
       - name: Record latest successful build run
@@ -196,9 +202,9 @@ jobs:
           git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5.2-Background-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.5.1"
+            version = "0.5.2"
             status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8

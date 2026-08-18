@@ -7,7 +7,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt, QPoint, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -24,11 +24,86 @@ from PySide6.QtWidgets import (
 from app import APP_NAME
 from app_v4 import MainWindow as V4MainWindow
 from capture_engine import list_windows
-from pdf_tools import build_outputs, sanitize_filename, tesseract_available
+from pdf_tools import build_outputs, configure_tesseract, make_image_pdf, make_ocr_outputs, sanitize_filename
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
+
+
+class PostProcessThread(QThread):
+    """Perform all post-capture disk, PDF and OCR work off the GUI thread."""
+    progress = Signal(int, int, str)
+    log = Signal(str)
+    completed = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.config = config
+
+    def _progress(self, current, total, message):
+        self.progress.emit(current, max(total, 1), message)
+
+    def run(self):
+        try:
+            c = self.config
+            source = Path(c["image_dir"])
+            processing = source
+            count = c["captured_count"]
+            if c["split_spreads"]:
+                self._progress(0, count, f"分割中 0/{count}画面")
+                processing = source.parent / "images-split"
+                pages = split_spreads(
+                    source, processing, order=c["split_order"],
+                    top_crop_pct=c["top_crop"], bottom_crop_pct=c["bottom_crop"],
+                    progress=lambda n, total, _: self._progress(n, total, f"分割中 {n}/{total}画面"),
+                )
+                self.log.emit(f"見開き処理: {count}画面 → {len(pages)}ページ / {c['split_order_label']}")
+            elif c["top_crop"] > 0 or c["bottom_crop"] > 0:
+                self._progress(0, count, f"トリミング中 0/{count}ページ")
+                processing = source.parent / "images-clean"
+                trim_pages(
+                    source, processing, top_crop_pct=c["top_crop"],
+                    bottom_crop_pct=c["bottom_crop"],
+                    progress=lambda n, total, _: self._progress(n, total, f"トリミング中 {n}/{total}ページ"),
+                )
+
+            page_count = len(list(processing.glob("page-*.png")))
+            outputs = []
+            if c["make_image_pdf"]:
+                image_pdf = source.parent / f"{c['base_name']}.pdf"
+                self._progress(0, page_count, "PDF生成中")
+                make_image_pdf(processing, image_pdf, progress=self._progress)
+                outputs.append(image_pdf)
+
+            ocr_error = None
+            if c["make_ocr_pdf"] or c["make_txt"]:
+                info = configure_tesseract()
+                self.log.emit("OCR診断: " + json.dumps(info, ensure_ascii=False))
+                try:
+                    if not info["available"]:
+                        raise RuntimeError("内蔵Tesseractを起動できません: " + info.get("error", "原因不明"))
+                    missing = sorted(set(filter(None, c["ocr_lang"].split("+"))) - set(info["languages"]))
+                    if missing:
+                        raise RuntimeError("OCR言語データがありません: " + ", ".join(missing))
+                    searchable = source.parent / f"{c['base_name']}-searchable.pdf" if c["make_ocr_pdf"] else None
+                    text_file = source.parent / f"{c['base_name']}.txt" if c["make_txt"] else None
+                    def report_ocr(n, total, message):
+                        self._progress(n, total, "検索可能PDF生成中" if n >= total and searchable else message)
+                    make_ocr_outputs(processing, searchable, text_file, c["ocr_lang"], progress=report_ocr)
+                    outputs.extend(x for x in (searchable, text_file) if x)
+                except Exception as exc:
+                    ocr_error = str(exc)
+                    self.log.emit("OCR失敗: " + traceback.format_exc())
+
+            outputs.extend(x for x in (processing, source) if x not in outputs)
+            self._progress(page_count, page_count, "完了")
+            self.completed.emit({"outputs": [str(x) for x in outputs], "pages": page_count,
+                                 "ocr_error": ocr_error, "top_crop": c["top_crop"],
+                                 "bottom_crop": c["bottom_crop"]})
+        except Exception:
+            self.failed.emit(traceback.format_exc())
 
 
 class MainWindow(V4MainWindow):
@@ -129,7 +204,7 @@ class MainWindow(V4MainWindow):
         bottom = self.footer_pct.value() if self.trim_footer.isChecked() else 0.0
         return top, bottom
 
-    def on_capture_completed(self, result):
+    def _legacy_on_capture_completed(self, result):
         captured_count = int(result["pages"])
         self.append_log(f"キャプチャ完了: {captured_count}画面")
         self.status_label.setText("クリーン処理 / PDF / OCR生成中…")
@@ -206,6 +281,70 @@ class MainWindow(V4MainWindow):
             self.on_failed(traceback.format_exc())
         finally:
             self.reset_buttons()
+
+    def on_capture_completed(self, result):
+        """Snapshot UI options and immediately hand expensive work to QThread."""
+        captured_count = int(result["pages"])
+        self.append_log(f"キャプチャ完了: {captured_count}画面")
+        top_crop, bottom_crop = self._crop_values()
+        self.progress.setRange(0, max(captured_count, 1))
+        self.progress.setValue(0)
+        self.status_label.setText("後処理を開始中…")
+        self.pause_btn.setEnabled(False)
+        self.resume_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        config = {
+            "image_dir": result["image_dir"], "captured_count": captured_count,
+            "top_crop": top_crop, "bottom_crop": bottom_crop,
+            "split_spreads": self.split_spreads.isChecked(),
+            "split_order": self.split_order.currentData() or "rtl",
+            "split_order_label": self.split_order.currentText(),
+            "base_name": sanitize_filename(self.book_title.text().strip() or "captured-book"),
+            "make_image_pdf": self.make_pdf.isChecked(),
+            "make_ocr_pdf": self.make_ocr_pdf.isChecked(),
+            "make_txt": self.make_txt.isChecked(),
+            "ocr_lang": self.ocr_lang.text().strip() or "jpn+eng",
+        }
+        self.post_process_thread = PostProcessThread(config, self)
+        self.post_process_thread.progress.connect(self.on_post_process_progress)
+        self.post_process_thread.log.connect(self.append_log)
+        self.post_process_thread.failed.connect(self.on_post_process_failed)
+        self.post_process_thread.completed.connect(self.on_post_process_completed)
+        self.post_process_thread.start()
+
+    def on_post_process_progress(self, current, total, message):
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(current)
+        self.status_label.setText(message)
+
+    def on_post_process_failed(self, detail):
+        self.post_process_thread = None
+        self.on_failed(detail)
+
+    def on_post_process_completed(self, result):
+        self.post_process_thread = None
+        for item in result["outputs"]:
+            self.append_log(f"出力: {item}")
+        self.status_label.setText(f"完了 — {result['pages']}ページ")
+        self.reset_buttons()
+        message = (
+            f"処理が完了しました。\n\n完成ページ数: {result['pages']}\n"
+            f"上トリミング: {result['top_crop']:.1f}% / 下トリミング: {result['bottom_crop']:.1f}%\n\n"
+            + "\n".join(result["outputs"])
+        )
+        if result["ocr_error"]:
+            message += "\n\nOCRだけ失敗しました。画像PDFと元画像は保存済みです。\n理由: " + result["ocr_error"]
+            QMessageBox.warning(self, APP_NAME, message)
+        else:
+            QMessageBox.information(self, APP_NAME, message)
+
+    def closeEvent(self, event):
+        worker = getattr(self, "post_process_thread", None)
+        if worker and worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "後処理中です。完了してから閉じてください。")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 def run_self_test(output_path: str) -> int:

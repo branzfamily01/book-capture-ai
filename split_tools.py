@@ -31,6 +31,7 @@ def trim_pages(
     output_dir: Path,
     top_crop_pct: float = 0.0,
     bottom_crop_pct: float = 0.0,
+    progress=None,
 ) -> List[Path]:
     """Trim header/footer from single-page captures while preserving originals."""
     image_dir = Path(image_dir)
@@ -51,6 +52,8 @@ def trim_pages(
             clean.save(out, "PNG", optimize=True)
             clean.close()
             written.append(out)
+        if progress:
+            progress(index, len(files), "トリミング中")
     return written
 
 
@@ -60,6 +63,7 @@ def split_spreads(
     order: str = "rtl",
     top_crop_pct: float = 0.0,
     bottom_crop_pct: float = 0.0,
+    progress=None,
 ) -> List[Path]:
     """Trim a captured spread, then split it at the horizontal midpoint.
 
@@ -84,7 +88,7 @@ def split_spreads(
     written: List[Path] = []
     page_no = 1
 
-    for source in files:
+    for spread_index, source in enumerate(files, start=1):
         with Image.open(source) as img:
             clean = _crop_vertical(img, top_crop_pct, bottom_crop_pct)
             width, height = clean.size
@@ -106,5 +110,8 @@ def split_spreads(
             left.close()
             right.close()
             clean.close()
+
+        if progress:
+            progress(spread_index, len(files), "分割中")
 
     return written
