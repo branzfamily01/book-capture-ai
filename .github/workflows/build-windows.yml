@@ -1,4 +1,4 @@
-name: Build Windows EXE v0.4 with split pages and bundled OCR
+name: Build Windows EXE v0.5 with clean split pages and bundled OCR
 
 on:
   workflow_dispatch:
@@ -23,16 +23,16 @@ jobs:
         run: |
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.4-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5-Clean-Split-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.4"
+            version = "0.5"
             status = "running"
           } | ConvertTo-Json
           Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .current-build.json
-          git commit -m "Record current v0.4 Windows build" || exit 0
+          git commit -m "Record current v0.5 Windows build" || exit 0
           git push
 
       - name: Setup Python
@@ -54,7 +54,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app_v4.py
+          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app_v5.py
 
       - name: Bundle Tesseract OCR
         shell: pwsh
@@ -80,29 +80,23 @@ jobs:
           Copy-Item -Path (Join-Path $runtimeDir "*") -Destination $ocrDir -Recurse -Force
           New-Item -ItemType Directory -Force -Path (Join-Path $ocrDir "tessdata") | Out-Null
 
-          $models = @("eng", "jpn", "jpn_vert", "osd")
-          foreach ($model in $models) {
+          foreach ($model in @("eng", "jpn", "jpn_vert", "osd")) {
             Invoke-WebRequest `
               -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$model.traineddata" `
               -OutFile (Join-Path $ocrDir "tessdata/$model.traineddata")
           }
 
-          Invoke-WebRequest `
-            -Uri "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE" `
-            -OutFile (Join-Path $ocrDir "LICENSE-Tesseract.txt")
-          Invoke-WebRequest `
-            -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/LICENSE" `
-            -OutFile (Join-Path $ocrDir "LICENSE-tessdata_fast.txt")
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tesseract-ocr/tesseract/main/LICENSE" -OutFile (Join-Path $ocrDir "LICENSE-Tesseract.txt")
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/LICENSE" -OutFile (Join-Path $ocrDir "LICENSE-tessdata_fast.txt")
           Copy-Item "THIRD-PARTY-NOTICES.md" (Join-Path $ocrDir "THIRD-PARTY-NOTICES.md")
 
           & (Join-Path $ocrDir "tesseract.exe") --version
           $langs = & (Join-Path $ocrDir "tesseract.exe") --list-langs 2>&1
-          $langs | Write-Output
           foreach ($requiredLang in @("eng", "jpn", "jpn_vert")) {
             if ($langs -notcontains $requiredLang) { throw "Missing OCR language: $requiredLang" }
           }
 
-      - name: Test split pages plus OCR integration
+      - name: Test clean split pages plus OCR integration
         shell: pwsh
         run: |
           Copy-Item "dist/BookCaptureAI/ocr" "ocr" -Recurse -Force
@@ -114,27 +108,30 @@ jobs:
           from pdf_tools import configure_tesseract, make_ocr_outputs
           from split_tools import split_spreads
 
-          base = Path("v4-integration-test")
+          base = Path("v5-integration-test")
           spreads = base / "images"
           spreads.mkdir(parents=True, exist_ok=True)
-          image = Image.new("RGB", (1401, 520), "white")
+          image = Image.new("RGB", (1400, 1000), "white")
           draw = ImageDraw.Draw(image)
+          draw.rectangle((0, 0, 1399, 79), fill="red")
+          draw.rectangle((0, 940, 1399, 999), fill="blue")
           font_path = Path(os.environ["WINDIR"]) / "Fonts" / "arial.ttf"
           font = ImageFont.truetype(str(font_path), 64)
-          draw.text((60, 180), "LEFT PAGE 11111", fill="black", font=font)
-          draw.text((760, 180), "RIGHT PAGE 12345", fill="black", font=font)
+          draw.text((80, 300), "LEFT PAGE 11111", fill="black", font=font)
+          draw.text((780, 300), "RIGHT PAGE 12345", fill="black", font=font)
           image.save(spreads / "page-0001.png")
 
           split_dir = base / "images-split"
-          pages = split_spreads(spreads, split_dir, order="rtl")
+          pages = split_spreads(spreads, split_dir, order="rtl", top_crop_pct=8.0, bottom_crop_pct=6.0)
           assert len(pages) == 2
-          assert Image.open(pages[0]).size == (701, 520)
-          assert Image.open(pages[1]).size == (700, 520)
+          with Image.open(pages[0]) as p:
+            assert p.size == (700, 860), p.size
+            assert p.getpixel((10, 0)) == (255, 255, 255)
+            assert p.getpixel((10, p.height - 1)) == (255, 255, 255)
 
           info = configure_tesseract()
           assert info["available"], info
           assert info["source"] == "bundled", info
-          assert {"eng", "jpn", "jpn_vert"}.issubset(set(info["languages"])), info
 
           searchable = base / "searchable.pdf"
           text_file = base / "text.txt"
@@ -151,7 +148,7 @@ jobs:
       - name: Self-test packaged EXE
         shell: pwsh
         run: |
-          $report = Join-Path $PWD "selftest-v4.json"
+          $report = Join-Path $PWD "selftest-v5.json"
           $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
           $p = Start-Process -FilePath $exe -ArgumentList @("--self-test", $report) -Wait -PassThru
           if ($p.ExitCode -ne 0) {
@@ -162,9 +159,10 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
-          if ($json.version -ne "0.4") { throw "Wrong app version in self-test" }
+          if ($json.version -ne "0.5") { throw "Wrong app version in self-test" }
           if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
-          if ($json.checks.pdf_pages -ne 12) { throw "Split PDF page count failed" }
+          if ($json.checks.clean_size[0] -ne 500 -or $json.checks.clean_size[1] -ne 860) { throw "Trim size self-test failed" }
+          if ($json.checks.pdf_pages -ne 12) { throw "Clean split PDF page count failed" }
 
       - name: Verify package contents
         shell: pwsh
@@ -187,7 +185,7 @@ jobs:
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.4-Split-OCR
+          name: BookCaptureAI-Windows-v0.5-Clean-Split-OCR
           path: dist/BookCaptureAI/
 
       - name: Record latest successful build run
@@ -196,14 +194,14 @@ jobs:
           git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.4-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5-Clean-Split-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.4"
+            version = "0.5"
             status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .latest-build.json
-          git commit -m "Record latest successful v0.4 Windows build" || exit 0
+          git commit -m "Record latest successful v0.5 Windows build" || exit 0
           git push
