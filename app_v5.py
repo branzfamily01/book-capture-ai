@@ -28,7 +28,7 @@ from pdf_tools import build_outputs, configure_tesseract, make_image_pdf, make_o
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 
 
 class PostProcessThread(QThread):
@@ -286,6 +286,15 @@ class MainWindow(V4MainWindow):
         """Snapshot UI options and immediately hand expensive work to QThread."""
         captured_count = int(result["pages"])
         self.append_log(f"キャプチャ完了: {captured_count}画面")
+        reason_labels = {
+            "same-screen-limit": "同一画面が3回続いたため自動停止",
+            "manual-stop": "終了ボタンによる停止",
+            "maximum-pages": "最大ページ数に到達",
+        }
+        if result.get("stop_reason"):
+            self.append_log("キャプチャ終了理由: " + reason_labels.get(
+                result["stop_reason"], result["stop_reason"]
+            ))
         top_crop, bottom_crop = self._crop_values()
         self.progress.setRange(0, max(captured_count, 1))
         self.progress.setValue(0)
@@ -407,6 +416,8 @@ def run_self_test(output_path: str) -> int:
             report["checks"]["footer_default"] = win.trim_footer.isChecked()
             report["checks"]["header_pct"] = win.header_pct.value()
             report["checks"]["footer_pct"] = win.footer_pct.value()
+            report["checks"]["same_screen_minimum"] = win.same_limit.minimum()
+            report["checks"]["same_screen_value"] = win.same_limit.value()
             report["checks"]["settings_scroll_exists"] = win.settings_scroll is not None
             report["checks"]["start_button_visible_600px"] = (
                 win.start_btn.isVisible()
@@ -431,6 +442,8 @@ def run_self_test(output_path: str) -> int:
                 and report["checks"]["footer_default"]
                 and report["checks"]["header_pct"] == 8.0
                 and report["checks"]["footer_pct"] == 6.0
+                and report["checks"]["same_screen_minimum"] == 3
+                and report["checks"]["same_screen_value"] >= 3
                 and report["checks"]["settings_scroll_exists"]
                 and report["checks"]["start_button_visible_600px"]
             )

@@ -78,11 +78,25 @@ def send_page_turn_key(key: str):
 
 
 def image_difference_score(a: Image.Image, b: Image.Image) -> float:
+    """Measure both whole-screen and localized content changes.
+
+    A whole-screen mean misses Kindle pages where only a small text or table
+    area changes against a large white background.  The average of the eight
+    most-changed tiles detects those real page turns while ignoring a cursor or
+    caret confined to one tile.
+    """
     a = a.convert("L").resize((240, 240))
     b = b.convert("L").resize((240, 240))
     diff = ImageChops.difference(a, b)
-    stat = ImageStat.Stat(diff)
-    return float(stat.mean[0])
+    whole_mean = float(ImageStat.Stat(diff).mean[0])
+    tile_scores = []
+    tile_size = 30
+    for y in range(0, 240, tile_size):
+        for x in range(0, 240, tile_size):
+            tile = diff.crop((x, y, x + tile_size, y + tile_size))
+            tile_scores.append(float(ImageStat.Stat(tile).mean[0]))
+    localized_mean = sum(sorted(tile_scores, reverse=True)[:8]) / 8
+    return max(whole_mean, localized_mean)
 
 
 class CaptureEngine:
@@ -228,6 +242,10 @@ class CaptureEngine:
         time.sleep(0.5)
 
         same_count = 0
+        # A saved value of 1 can stop a long capture on one sparse/slow page.
+        # Always retry at least three turns before deciding the book ended.
+        effective_same_limit = max(3, self.config.same_limit)
+        stop_reason = "maximum-pages" if self.config.max_pages <= 1 else "completed"
         page_count = 0
         prev = None
 
@@ -273,9 +291,13 @@ class CaptureEngine:
 
                 if not changed:
                     same_count += 1
-                    self.log(f"画面変化なし ({same_count}/{self.config.same_limit})")
-                    if same_count >= self.config.same_limit:
+                    self.log(
+                        f"画面変化なし — ページ送りを再試行します "
+                        f"({same_count}/{effective_same_limit})"
+                    )
+                    if same_count >= effective_same_limit:
                         self.status("同じ画面が続いたため自動停止")
+                        stop_reason = "same-screen-limit"
                         break
                     continue
 
@@ -286,10 +308,11 @@ class CaptureEngine:
                     same_count += 1
                     self.log(
                         f"安定後に前ページとほぼ同一: score={final_score:.2f} "
-                        f"({same_count}/{self.config.same_limit})"
+                        f"({same_count}/{effective_same_limit})"
                     )
-                    if same_count >= self.config.same_limit:
+                    if same_count >= effective_same_limit:
                         self.status("同じ画面が続いたため自動停止")
+                        stop_reason = "same-screen-limit"
                         break
                     continue
 
@@ -301,4 +324,9 @@ class CaptureEngine:
                     self.on_progress(page_count, str(path))
 
         self.status("キャプチャ終了")
-        return {"pages": page_count, "image_dir": str(image_dir)}
+        if self._stop.is_set():
+            stop_reason = "manual-stop"
+        elif page_count >= self.config.max_pages:
+            stop_reason = "maximum-pages"
+        self.log(f"終了理由: {stop_reason}")
+        return {"pages": page_count, "image_dir": str(image_dir), "stop_reason": stop_reason}

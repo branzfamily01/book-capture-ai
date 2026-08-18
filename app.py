@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
         cap.addWidget(self.diff_threshold, 2, 1)
 
         self.same_limit = QSpinBox()
-        self.same_limit.setRange(1, 10)
+        self.same_limit.setRange(3, 10)
         self.same_limit.setValue(3)
         cap.addWidget(QLabel("同一画面で自動停止"), 2, 2)
         cap.addWidget(self.same_limit, 2, 3)
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
         self.settle_delay.setValue(float(self.settings.value("settle_delay", 0.45)))
         self.change_timeout.setValue(float(self.settings.value("change_timeout", 2.5)))
         self.diff_threshold.setValue(float(self.settings.value("diff_threshold", 1.8)))
-        self.same_limit.setValue(int(self.settings.value("same_limit", 3)))
+        self.same_limit.setValue(max(3, int(self.settings.value("same_limit", 3))))
         self.output_dir.setText(self.settings.value("output_dir", str(Path.home() / "Downloads")))
         self.ocr_lang.setText(self.settings.value("ocr_lang", "jpn+eng"))
         self.make_ocr_pdf.setChecked(self.settings.value("ocr_pdf", False, type=bool))

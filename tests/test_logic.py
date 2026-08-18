@@ -17,6 +17,16 @@ def test_changed_image_score_is_large():
     assert image_difference_score(a, b) > 100
 
 
+def test_sparse_page_change_is_not_diluted_by_white_margins():
+    a = Image.new("RGB", (1200, 900), "white")
+    b = a.copy()
+    # Approximate a Kindle page where only a compact text/table area changes.
+    for x in range(120, 620):
+        for y in range(180, 390):
+            b.putpixel((x, y), (150, 150, 150))
+    assert image_difference_score(a, b) >= 1.8
+
+
 def test_sanitize_filename():
     assert sanitize_filename('a:b/c*?') == 'a-b-c--'
 
