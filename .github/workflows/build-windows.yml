@@ -1,4 +1,4 @@
-name: Build Windows EXE with bundled OCR
+name: Build Windows EXE v0.4 with split pages and bundled OCR
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app.py
+          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app_v4.py
 
       - name: Bundle Tesseract OCR
         shell: pwsh
@@ -79,7 +79,7 @@ jobs:
             if ($langs -notcontains $requiredLang) { throw "Missing OCR language: $requiredLang" }
           }
 
-      - name: Test OCR integration
+      - name: Test split pages plus OCR integration
         shell: pwsh
         run: |
           Copy-Item "dist/BookCaptureAI/ocr" "ocr" -Recurse -Force
@@ -89,16 +89,24 @@ jobs:
           from PIL import Image, ImageDraw, ImageFont
           from pypdf import PdfReader
           from pdf_tools import configure_tesseract, make_ocr_outputs
+          from split_tools import split_spreads
 
-          base = Path("ocr-integration-test")
-          image_dir = base / "images"
-          image_dir.mkdir(parents=True, exist_ok=True)
-          image = Image.new("RGB", (1400, 260), "white")
+          base = Path("v4-integration-test")
+          spreads = base / "images"
+          spreads.mkdir(parents=True, exist_ok=True)
+          image = Image.new("RGB", (1401, 520), "white")
           draw = ImageDraw.Draw(image)
           font_path = Path(os.environ["WINDIR"]) / "Fonts" / "arial.ttf"
-          font = ImageFont.truetype(str(font_path), 78)
-          draw.text((40, 60), "BOOK CAPTURE OCR TEST 12345", fill="black", font=font)
-          image.save(image_dir / "page-0001.png")
+          font = ImageFont.truetype(str(font_path), 64)
+          draw.text((60, 180), "LEFT PAGE 11111", fill="black", font=font)
+          draw.text((760, 180), "RIGHT PAGE 12345", fill="black", font=font)
+          image.save(spreads / "page-0001.png")
+
+          split_dir = base / "images-split"
+          pages = split_spreads(spreads, split_dir, order="rtl")
+          assert len(pages) == 2
+          assert Image.open(pages[0]).size == (701, 520)
+          assert Image.open(pages[1]).size == (700, 520)
 
           info = configure_tesseract()
           assert info["available"], info
@@ -107,10 +115,11 @@ jobs:
 
           searchable = base / "searchable.pdf"
           text_file = base / "text.txt"
-          make_ocr_outputs(image_dir, searchable, text_file, "eng")
-          assert searchable.exists() and len(PdfReader(str(searchable)).pages) == 1
+          make_ocr_outputs(split_dir, searchable, text_file, "eng")
+          assert searchable.exists() and len(PdfReader(str(searchable)).pages) == 2
           text = text_file.read_text(encoding="utf-8")
           assert "12345" in text, text
+          assert "11111" in text, text
           print(info)
           print(text)
           '@ | python -
@@ -119,7 +128,7 @@ jobs:
       - name: Self-test packaged EXE
         shell: pwsh
         run: |
-          $report = Join-Path $PWD "selftest.json"
+          $report = Join-Path $PWD "selftest-v4.json"
           $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
           $p = Start-Process -FilePath $exe -ArgumentList @("--self-test", $report) -Wait -PassThru
           if ($p.ExitCode -ne 0) {
@@ -130,6 +139,9 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
+          if ($json.version -ne "0.4") { throw "Wrong app version in self-test" }
+          if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
+          if ($json.checks.pdf_pages -ne 12) { throw "Split PDF page count failed" }
 
       - name: Verify package contents
         shell: pwsh
@@ -152,5 +164,5 @@ jobs:
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.3-OCR-Bundled
+          name: BookCaptureAI-Windows-v0.4-Split-OCR
           path: dist/BookCaptureAI/
