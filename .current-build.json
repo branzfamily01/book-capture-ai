@@ -1,7 +1,7 @@
 {
-  "version": "0.4",
-  "run_id": 32110606134,
   "status": "running",
+  "version": "0.4",
   "artifact": "BookCaptureAI-Windows-v0.4-Split-OCR",
-  "commit": "2d043683938382cd4dcac4ce8a75286b90be4d30"
+  "run_id": 32110649125,
+  "commit": "6eb071784a8d84de2924f7699bc1de011db6d3be"
 }
