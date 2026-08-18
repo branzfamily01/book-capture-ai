@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
 import json
 import threading
@@ -8,9 +10,17 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple, List
 
 import mss
-import pyautogui
 import pygetwindow as gw
 from PIL import Image, ImageChops, ImageStat
+
+
+PAGE_KEY_VK = {
+    "left": 0x25,      # VK_LEFT
+    "right": 0x27,     # VK_RIGHT
+    "space": 0x20,     # VK_SPACE
+    "pagedown": 0x22,  # VK_NEXT
+}
+KEYEVENTF_KEYUP = 0x0002
 
 
 @dataclass
@@ -41,6 +51,30 @@ def list_windows(exclude_contains=None) -> List[str]:
     except Exception:
         pass
     return titles
+
+
+def virtual_key_for(key: str) -> int:
+    normalized = (key or "").strip().lower()
+    if normalized not in PAGE_KEY_VK:
+        raise ValueError(f"未対応のページ送りキーです: {key}")
+    return PAGE_KEY_VK[normalized]
+
+
+def send_page_turn_key(key: str):
+    """Send a page-turn key using the native Windows API.
+
+    This deliberately avoids PyAutoGUI so moving the mouse to a screen corner
+    cannot abort a capture. Target-window foreground verification is performed
+    separately immediately before this call.
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("ページ送りキー送信はWindows版でのみ利用できます。")
+
+    vk = virtual_key_for(key)
+    user32 = ctypes.windll.user32
+    user32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.03)
+    user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
 
 def image_difference_score(a: Image.Image, b: Image.Image) -> float:
@@ -103,7 +137,6 @@ class CaptureEngine:
 
             if hwnd:
                 try:
-                    import ctypes
                     user32 = ctypes.windll.user32
                     if user32.GetForegroundWindow() == hwnd:
                         return
@@ -217,7 +250,7 @@ class CaptureEngine:
 
                 self.status(f"{page_count}ページ取得済み — 次ページへ")
                 self.activate_target()
-                pyautogui.press(self.config.turn_key)
+                send_page_turn_key(self.config.turn_key)
 
                 changed = False
                 start = time.time()
