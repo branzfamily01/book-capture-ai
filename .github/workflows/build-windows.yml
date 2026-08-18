@@ -6,6 +6,7 @@ on:
     branches: [ main ]
     paths-ignore:
       - ".latest-build.json"
+      - ".current-build.json"
 
 permissions:
   contents: write
@@ -16,6 +17,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Record current build run
+        shell: pwsh
+        run: |
+          $data = @{
+            run_id = [int64]$env:GITHUB_RUN_ID
+            artifact = "BookCaptureAI-Windows-v0.4-Split-OCR"
+            commit = $env:GITHUB_SHA
+            version = "0.4"
+            status = "running"
+          } | ConvertTo-Json
+          Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .current-build.json
+          git commit -m "Record current v0.4 Windows build" || exit 0
+          git push
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -175,11 +193,13 @@ jobs:
       - name: Record latest successful build run
         shell: pwsh
         run: |
+          git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
             artifact = "BookCaptureAI-Windows-v0.4-Split-OCR"
             commit = $env:GITHUB_SHA
             version = "0.4"
+            status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
