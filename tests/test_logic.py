@@ -1,5 +1,5 @@
 from PIL import Image
-from capture_engine import image_difference_score
+from capture_engine import image_difference_score, virtual_key_for
 from pdf_tools import sanitize_filename
 from app import logical_rect_to_native_region
 
@@ -18,6 +18,13 @@ def test_changed_image_score_is_large():
 
 def test_sanitize_filename():
     assert sanitize_filename('a:b/c*?') == 'a-b-c--'
+
+
+def test_page_turn_virtual_keys():
+    assert virtual_key_for("left") == 0x25
+    assert virtual_key_for("right") == 0x27
+    assert virtual_key_for("space") == 0x20
+    assert virtual_key_for("pagedown") == 0x22
 
 
 def test_image_pdf_generation_is_multipage(tmp_path):
