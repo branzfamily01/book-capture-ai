@@ -1,7 +1,7 @@
 {
-  "artifact": "BookCaptureAI-Windows-v0.5.2-Background-OCR",
-  "commit": "54bfe242a6b4b48d119f651fe5b26a0115a098c2",
-  "run_id": 32126985069,
-  "version": "0.5.2",
-  "status": "running"
+  "commit": "d1d06aa886d3451184d76d951a365efc44f6a6b5",
+  "status": "running",
+  "artifact": "BookCaptureAI-Windows-v0.5.3-Sparse-Page-Guard",
+  "version": "0.5.3",
+  "run_id": 32142802837
 }
