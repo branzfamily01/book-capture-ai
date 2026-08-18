@@ -1,4 +1,4 @@
-name: Build Windows EXE v0.5 with clean split pages and bundled OCR
+name: Build Windows EXE v0.5.1 with responsive clean split UI
 
 on:
   workflow_dispatch:
@@ -23,16 +23,16 @@ jobs:
         run: |
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5-Clean-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.5"
+            version = "0.5.1"
             status = "running"
           } | ConvertTo-Json
           Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .current-build.json
-          git commit -m "Record current v0.5 Windows build" || exit 0
+          git commit -m "Record current v0.5.1 Windows build" || exit 0
           git push
 
       - name: Setup Python
@@ -148,7 +148,7 @@ jobs:
       - name: Self-test packaged EXE
         shell: pwsh
         run: |
-          $report = Join-Path $PWD "selftest-v5.json"
+          $report = Join-Path $PWD "selftest-v5-1.json"
           $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
           $p = Start-Process -FilePath $exe -ArgumentList @("--self-test", $report) -Wait -PassThru
           if ($p.ExitCode -ne 0) {
@@ -159,10 +159,12 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
-          if ($json.version -ne "0.5") { throw "Wrong app version in self-test" }
+          if ($json.version -ne "0.5.1") { throw "Wrong app version in self-test" }
           if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
           if ($json.checks.clean_size[0] -ne 500 -or $json.checks.clean_size[1] -ne 860) { throw "Trim size self-test failed" }
           if ($json.checks.pdf_pages -ne 12) { throw "Clean split PDF page count failed" }
+          if (-not $json.checks.settings_scroll_exists) { throw "Scrollable settings area missing" }
+          if (-not $json.checks.start_button_visible_600px) { throw "Start button is not visible at 600px window height" }
 
       - name: Verify package contents
         shell: pwsh
@@ -185,7 +187,7 @@ jobs:
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.5-Clean-Split-OCR
+          name: BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR
           path: dist/BookCaptureAI/
 
       - name: Record latest successful build run
@@ -194,14 +196,14 @@ jobs:
           git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5-Clean-Split-OCR"
+            artifact = "BookCaptureAI-Windows-v0.5.1-Responsive-Clean-Split-OCR"
             commit = $env:GITHUB_SHA
-            version = "0.5"
+            version = "0.5.1"
             status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .latest-build.json
-          git commit -m "Record latest successful v0.5 Windows build" || exit 0
+          git commit -m "Record latest successful v0.5.1 Windows build" || exit 0
           git push
