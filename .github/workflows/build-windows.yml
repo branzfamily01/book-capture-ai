@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths-ignore:
+      - ".latest-build.json"
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -166,3 +171,19 @@ jobs:
         with:
           name: BookCaptureAI-Windows-v0.4-Split-OCR
           path: dist/BookCaptureAI/
+
+      - name: Record latest successful build run
+        shell: pwsh
+        run: |
+          $data = @{
+            run_id = [int64]$env:GITHUB_RUN_ID
+            artifact = "BookCaptureAI-Windows-v0.4-Split-OCR"
+            commit = $env:GITHUB_SHA
+            version = "0.4"
+          } | ConvertTo-Json
+          Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .latest-build.json
+          git commit -m "Record latest successful v0.4 Windows build" || exit 0
+          git push
