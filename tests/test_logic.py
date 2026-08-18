@@ -2,6 +2,7 @@ from PIL import Image
 from capture_engine import image_difference_score, virtual_key_for
 from pdf_tools import sanitize_filename
 from app import logical_rect_to_native_region
+from split_tools import split_spreads
 
 
 def test_same_image_score_is_zero():
@@ -25,6 +26,41 @@ def test_page_turn_virtual_keys():
     assert virtual_key_for("right") == 0x27
     assert virtual_key_for("space") == 0x20
     assert virtual_key_for("pagedown") == 0x22
+
+
+def test_split_spread_rtl_odd_width(tmp_path):
+    src = tmp_path / "images"
+    out = tmp_path / "images-split"
+    src.mkdir()
+    img = Image.new("RGB", (901, 100), "red")
+    for x in range(450, 901):
+        for y in range(100):
+            img.putpixel((x, y), (0, 0, 255))
+    img.save(src / "page-0001.png")
+
+    files = split_spreads(src, out, order="rtl")
+    assert len(files) == 2
+    with Image.open(files[0]) as first, Image.open(files[1]) as second:
+        assert first.size == (451, 100)
+        assert second.size == (450, 100)
+        assert first.getpixel((10, 10)) == (0, 0, 255)
+        assert second.getpixel((10, 10)) == (255, 0, 0)
+
+
+def test_split_spread_ltr_order(tmp_path):
+    src = tmp_path / "images"
+    out = tmp_path / "images-split"
+    src.mkdir()
+    img = Image.new("RGB", (800, 100), "red")
+    for x in range(400, 800):
+        for y in range(100):
+            img.putpixel((x, y), (0, 0, 255))
+    img.save(src / "page-0001.png")
+
+    files = split_spreads(src, out, order="ltr")
+    with Image.open(files[0]) as first, Image.open(files[1]) as second:
+        assert first.getpixel((10, 10)) == (255, 0, 0)
+        assert second.getpixel((10, 10)) == (0, 0, 255)
 
 
 def test_image_pdf_generation_is_multipage(tmp_path):
