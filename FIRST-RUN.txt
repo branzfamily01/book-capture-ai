@@ -1,18 +1,26 @@
-BOOK CAPTURE AI - FIRST RUN
+BOOK CAPTURE AI v0.4 - FIRST RUN
 
-1. Open Kindle / an ebook reader / browser on Windows.
+1. Open Kindle for Web / an ebook reader / browser on Windows.
 2. Run BookCaptureAI.exe.
 3. Click "ウィンドウ更新" and choose the ebook window.
-4. Click "画面範囲を選択" and drag around only the book page.
+4. Click "画面範囲を選択" and drag around the whole visible book area.
 5. Choose the page-turn key (Kindle is often ← or → depending on layout).
-6. Click "キャプチャ開始".
-7. The app stops automatically when the same screen repeats, or at the max page count.
-8. A PDF is created in the chosen output folder.
+6. For a two-page spread, keep "見開きを中央から2ページに自動分割する" ON.
+7. Japanese books: use "右 → 左". Western/left-to-right books: use "左 → 右".
+8. Click "キャプチャ開始".
+9. Original spread screenshots stay in images/.
+10. Split single-page images are saved in images-split/.
+11. PDF / searchable PDF / OCR TXT are generated from the split pages when split mode is ON.
 
 OCR:
 - Tesseract OCR + Japanese/English language data are bundled in the Windows package.
 - No separate OCR installation is required.
 - OCR runs locally on this PC.
+
+Notes:
+- Split mode currently divides at the exact center of the selected capture area.
+- For a normal one-page Kindle view, turn split mode OFF.
+- If a cover or chapter page occupies only one side, an extra blank/partial half may be created; the original spread is always preserved.
 
 Safety / rights:
 - This app does not remove DRM or bypass screenshot protection.
