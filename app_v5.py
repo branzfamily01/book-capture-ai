@@ -7,7 +7,19 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QMessageBox
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
+    QLabel,
+    QMessageBox,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app import APP_NAME
 from app_v4 import MainWindow as V4MainWindow
@@ -16,14 +28,13 @@ from pdf_tools import build_outputs, sanitize_filename, tesseract_available
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5"
+VERSION = "0.5.1"
 
 
 class MainWindow(V4MainWindow):
     def build_ui(self):
         super().build_ui()
         self.setWindowTitle(f"{APP_NAME} v{VERSION}")
-        self.resize(960, 930)
 
         main = self.centralWidget().layout()
         clean_box = QGroupBox("3.6 KindleクリーンPDF（ヘッダー・フッター除去）")
@@ -60,8 +71,43 @@ class MainWindow(V4MainWindow):
         grid.addWidget(self.footer_pct, 1, 1)
         grid.addWidget(explain, 2, 0, 1, 2)
 
-        # Insert after v0.4 spread-split settings and before control buttons.
+        # Insert after v0.4 spread-split settings and before fixed controls.
         main.insertWidget(6, clean_box)
+        self._make_layout_responsive()
+
+    def _make_layout_responsive(self):
+        """Scroll settings while keeping capture controls permanently visible."""
+        main = self.centralWidget().layout()
+
+        settings_widget = QWidget()
+        settings_layout = QVBoxLayout(settings_widget)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(10)
+
+        # At this point indices 0..6 are title/subtitle/target/capture/output/split/clean.
+        # Move only those into the scroll area. The button row, progress and log stay fixed.
+        for _ in range(7):
+            item = main.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            if widget is not None:
+                settings_layout.addWidget(widget)
+
+        settings_layout.addStretch(1)
+
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setObjectName("settingsScroll")
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_scroll.setWidget(settings_widget)
+        main.insertWidget(0, self.settings_scroll, 1)
+
+        # Preserve enough room for the fixed controls on short laptop displays.
+        self.log_box.setMinimumHeight(80)
+        self.log_box.setMaximumHeight(110)
+        self.resize(960, 760)
+        self.setMinimumSize(700, 540)
 
     def load_settings(self):
         super().load_settings()
@@ -209,12 +255,26 @@ def run_self_test(output_path: str) -> int:
             os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
             qt_app = QApplication.instance() or QApplication([])
             win = MainWindow()
+            win.resize(900, 600)
+            win.show()
+            qt_app.processEvents()
+
+            start_bottom = win.start_btn.mapTo(
+                win.centralWidget(), QPoint(0, win.start_btn.height())
+            ).y()
             report["checks"]["mainwindow_constructed"] = bool(win.windowTitle())
             report["checks"]["split_default_on"] = win.split_spreads.isChecked()
             report["checks"]["header_default"] = win.trim_header.isChecked()
             report["checks"]["footer_default"] = win.trim_footer.isChecked()
             report["checks"]["header_pct"] = win.header_pct.value()
             report["checks"]["footer_pct"] = win.footer_pct.value()
+            report["checks"]["settings_scroll_exists"] = win.settings_scroll is not None
+            report["checks"]["start_button_visible_600px"] = (
+                win.start_btn.isVisible()
+                and start_bottom <= win.centralWidget().height()
+            )
+            report["checks"]["central_height"] = win.centralWidget().height()
+            report["checks"]["start_button_bottom"] = start_bottom
             win.close()
             qt_app.processEvents()
 
@@ -232,6 +292,8 @@ def run_self_test(output_path: str) -> int:
                 and report["checks"]["footer_default"]
                 and report["checks"]["header_pct"] == 8.0
                 and report["checks"]["footer_pct"] == 6.0
+                and report["checks"]["settings_scroll_exists"]
+                and report["checks"]["start_button_visible_600px"]
             )
             report["outputs"] = [str(x) for x in outputs]
     except Exception:
