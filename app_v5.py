@@ -4,10 +4,14 @@ import json
 import os
 import sys
 import tempfile
+import time
 import traceback
+import ctypes
+import winsound
+from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QThread, Signal
+from PySide6.QtCore import Qt, QPoint, QThread, Signal, QAbstractNativeEventFilter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -28,7 +32,30 @@ from pdf_tools import build_outputs, configure_tesseract, make_image_pdf, make_o
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
+
+HOTKEY_PAUSE_ID = 0xBC81
+HOTKEY_FINISH_ID = 0xBC82
+WM_HOTKEY = 0x0312
+
+
+class GlobalHotkeyFilter(QAbstractNativeEventFilter):
+    """Receive Windows-wide F8/F9 even while Kindle is full screen."""
+
+    def __init__(self, window):
+        super().__init__()
+        self.window = window
+
+    def nativeEventFilter(self, event_type, message):
+        if sys.platform == "win32":
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == WM_HOTKEY:
+                    self.window.handle_global_hotkey(int(msg.wParam))
+                    return True, 0
+            except Exception:
+                self.window.append_log("グローバルキー受信エラー: " + traceback.format_exc())
+        return False, 0
 
 
 class PostProcessThread(QThread):
@@ -149,6 +176,77 @@ class MainWindow(V4MainWindow):
         # Insert after v0.4 spread-split settings and before fixed controls.
         main.insertWidget(6, clean_box)
         self._make_layout_responsive()
+        self.hotkey_help = QLabel("全画面操作: F8 一時停止／再開　｜　F9を2回 終了してPDF作成")
+        self.hotkey_help.setStyleSheet(
+            "background:#e8f4ff; color:#174a73; padding:8px; font-weight:600; border-radius:4px;"
+        )
+        main.insertWidget(1, self.hotkey_help)
+        self._finish_hotkey_deadline = 0.0
+
+    def register_global_hotkeys(self):
+        if sys.platform != "win32":
+            return False
+        user32 = ctypes.windll.user32
+        no_repeat = 0x4000
+        pause_ok = bool(user32.RegisterHotKey(None, HOTKEY_PAUSE_ID, no_repeat, 0x77))
+        finish_ok = bool(user32.RegisterHotKey(None, HOTKEY_FINISH_ID, no_repeat, 0x78))
+        if pause_ok and finish_ok:
+            self.append_log("全画面ホットキー: F8 一時停止/再開、F9を2回 終了してPDF作成")
+            return True
+        if pause_ok:
+            user32.UnregisterHotKey(None, HOTKEY_PAUSE_ID)
+        if finish_ok:
+            user32.UnregisterHotKey(None, HOTKEY_FINISH_ID)
+        self.append_log("警告: F8/F9が他のアプリで使用中のため登録できませんでした。")
+        return False
+
+    def unregister_global_hotkeys(self):
+        if sys.platform == "win32":
+            ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_PAUSE_ID)
+            ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_FINISH_ID)
+
+    def _sound(self, kind="info"):
+        sound = winsound.MB_ICONHAND if kind == "error" else winsound.MB_ICONASTERISK
+        winsound.MessageBeep(sound)
+
+    def _bring_notification_forward(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.user32.SetForegroundWindow(int(self.winId()))
+            except Exception:
+                pass
+
+    def handle_global_hotkey(self, hotkey_id):
+        worker = getattr(self, "capture_thread", None)
+        if hotkey_id == HOTKEY_PAUSE_ID:
+            if not worker or not worker.isRunning():
+                self._sound()
+                return
+            if self.pause_btn.isEnabled():
+                self.pause_capture()
+                self._sound()
+                self.append_log("F8: 一時停止しました")
+            elif self.resume_btn.isEnabled():
+                self.resume_capture()
+                self._sound()
+                self.append_log("F8: 再開しました")
+            return
+
+        if hotkey_id == HOTKEY_FINISH_ID and worker and worker.isRunning():
+            now = time.monotonic()
+            if now > self._finish_hotkey_deadline:
+                self._finish_hotkey_deadline = now + 2.5
+                self.status_label.setText("終了するには2.5秒以内にもう一度F9を押してください")
+                self.append_log("F9: 終了確認待ち（もう一度F9でPDF作成へ）")
+                self._sound()
+            else:
+                self._finish_hotkey_deadline = 0.0
+                self.stop_capture()
+                self._sound()
+                self.append_log("F9: キャプチャを終了してPDF作成へ進みます")
 
     def _make_layout_responsive(self):
         """Scroll settings while keeping capture controls permanently visible."""
@@ -330,6 +428,19 @@ class MainWindow(V4MainWindow):
         self.post_process_thread = None
         self.on_failed(detail)
 
+    def on_failed(self, detail):
+        self.append_log(detail)
+        self.status_label.setText("エラー")
+        self.reset_buttons()
+        self._sound("error")
+        self._bring_notification_forward()
+        last_line = next((line.strip() for line in reversed(detail.splitlines()) if line.strip()), "原因不明")
+        QMessageBox.critical(
+            self, APP_NAME,
+            "処理中にエラーが発生しました。\n\n理由: " + last_line
+            + "\n\n詳しい内容は画面下のログに残っています。"
+        )
+
     def on_post_process_completed(self, result):
         self.post_process_thread = None
         for item in result["outputs"]:
@@ -343,8 +454,12 @@ class MainWindow(V4MainWindow):
         )
         if result["ocr_error"]:
             message += "\n\nOCRだけ失敗しました。画像PDFと元画像は保存済みです。\n理由: " + result["ocr_error"]
+            self._sound("error")
+            self._bring_notification_forward()
             QMessageBox.warning(self, APP_NAME, message)
         else:
+            self._sound()
+            self._bring_notification_forward()
             QMessageBox.information(self, APP_NAME, message)
 
     def closeEvent(self, event):
@@ -418,6 +533,32 @@ def run_self_test(output_path: str) -> int:
             report["checks"]["footer_pct"] = win.footer_pct.value()
             report["checks"]["same_screen_minimum"] = win.same_limit.minimum()
             report["checks"]["same_screen_value"] = win.same_limit.value()
+            report["checks"]["hotkey_help_visible"] = win.hotkey_help.isVisible()
+            class FakeCaptureThread:
+                def __init__(self):
+                    self.actions = []
+                def isRunning(self):
+                    return True
+                def pause_capture(self):
+                    self.actions.append("pause")
+                def resume_capture(self):
+                    self.actions.append("resume")
+                def stop_capture(self):
+                    self.actions.append("stop")
+                def wait(self, _milliseconds):
+                    return True
+
+            fake_capture = FakeCaptureThread()
+            win.capture_thread = fake_capture
+            win._sound = lambda *_args: None
+            win.pause_btn.setEnabled(True)
+            win.resume_btn.setEnabled(False)
+            win.stop_btn.setEnabled(True)
+            win.handle_global_hotkey(HOTKEY_PAUSE_ID)
+            win.handle_global_hotkey(HOTKEY_PAUSE_ID)
+            win.handle_global_hotkey(HOTKEY_FINISH_ID)
+            win.handle_global_hotkey(HOTKEY_FINISH_ID)
+            report["checks"]["hotkey_actions"] = list(fake_capture.actions)
             report["checks"]["settings_scroll_exists"] = win.settings_scroll is not None
             report["checks"]["start_button_visible_600px"] = (
                 win.start_btn.isVisible()
@@ -444,6 +585,8 @@ def run_self_test(output_path: str) -> int:
                 and report["checks"]["footer_pct"] == 6.0
                 and report["checks"]["same_screen_minimum"] == 3
                 and report["checks"]["same_screen_value"] >= 3
+                and report["checks"]["hotkey_help_visible"]
+                and report["checks"]["hotkey_actions"] == ["pause", "resume", "stop"]
                 and report["checks"]["settings_scroll_exists"]
                 and report["checks"]["start_button_visible_600px"]
             )
@@ -469,6 +612,11 @@ def main():
     app.setStyle("Fusion")
     win = MainWindow()
     win.show()
+    hotkey_filter = GlobalHotkeyFilter(win)
+    app.installNativeEventFilter(hotkey_filter)
+    win._hotkey_filter = hotkey_filter
+    win.register_global_hotkeys()
+    app.aboutToQuit.connect(win.unregister_global_hotkeys)
     sys.exit(app.exec())
 
 
