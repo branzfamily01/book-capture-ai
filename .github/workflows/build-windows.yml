@@ -22,6 +22,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Record current v0.5.8 build run
+        shell: pwsh
+        run: |
+          $data = @{
+            run_id = [int64]$env:GITHUB_RUN_ID
+            artifact = "Book-Capture-AI-v0.5.8-Windows"
+            commit = $env:GITHUB_SHA
+            version = "0.5.8"
+            status = "running"
+          } | ConvertTo-Json
+          Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .current-build.json
+          git commit -m "Record current v0.5.8 Windows build" || exit 0
+          git pull --rebase
+          git push
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -191,17 +209,11 @@ jobs:
             if (-not (Test-Path $item)) { throw "Missing package item: $item" }
           }
 
-      - name: Create release ZIP
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist/BookCaptureAI/*" -DestinationPath "Book-Capture-AI-v0.5.8.zip" -Force
-          if (-not (Test-Path "Book-Capture-AI-v0.5.8.zip")) { throw "Release ZIP missing" }
-
-      - name: Upload Windows ZIP
+      - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
           name: Book-Capture-AI-v0.5.8-Windows
-          path: Book-Capture-AI-v0.5.8.zip
+          path: dist/BookCaptureAI/
           if-no-files-found: error
 
       - name: Record latest successful build run
