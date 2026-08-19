@@ -4,7 +4,6 @@ import ctypes
 import json
 import os
 import sys
-import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -29,7 +28,7 @@ from app_v5 import (
     HOTKEY_START_ID,
     MainWindow as V5MainWindow,
 )
-from capture_engine import CaptureConfig, list_windows
+from capture_engine import CaptureConfig
 from pdf_tools import sanitize_filename
 
 
@@ -37,7 +36,7 @@ VERSION = "0.5.8"
 
 
 class MainWindow(V5MainWindow):
-    """v0.5.8: delayed button start, safe cancel and exact fixed-count capture."""
+    """Delayed button start, safe cancel and exact fixed-count capture."""
 
     def build_ui(self):
         super().build_ui()
@@ -157,7 +156,7 @@ class MainWindow(V5MainWindow):
         self._sync_capture_mode_ui()
 
     def register_global_hotkeys(self):
-        """Register only F8/F9. F7 start was intentionally removed in v0.5.7."""
+        """Register only F8/F9. F7 start is intentionally removed."""
         if sys.platform != "win32":
             return False
         user32 = ctypes.windll.user32
@@ -178,7 +177,6 @@ class MainWindow(V5MainWindow):
         if sys.platform == "win32":
             ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_PAUSE_ID)
             ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_FINISH_ID)
-            # Clean up a stale registration from an older process defensively.
             ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_START_ID)
 
     def handle_global_hotkey(self, hotkey_id):
@@ -357,35 +355,9 @@ class MainWindow(V5MainWindow):
             return
 
         self.cancel_btn.setEnabled(False)
-        super().on_capture_completed(result)
-
-    def on_capture_completed(self, result):
-        if self._cancel_without_output:
-            captured_count = int(result.get("pages", 0))
-            image_dir = result.get("image_dir", "")
-            self.append_log(f"キャンセル完了: {captured_count}画面")
-            self.append_log("PDF/OCRは作成していません。")
-            if image_dir:
-                self.append_log(f"撮影済み画像: {image_dir}")
-            self.status_label.setText(
-                f"キャンセル済み — {captured_count}画面保存 / PDF・OCRなし"
-            )
-            self._cancel_without_output = False
-            self.reset_buttons()
-            self._sound()
-            self._bring_notification_forward()
-            QMessageBox.information(
-                self,
-                APP_NAME,
-                f"キャプチャをキャンセルしました。\n\n"
-                f"撮影済み: {captured_count}画面\n"
-                "PDF・OCRは作成していません。\n"
-                "途中までの画像はそのまま残しています。\n\n"
-                f"{image_dir}",
-            )
-            return
-
-        self.cancel_btn.setEnabled(False)
+        if result.get("stop_reason") == "fixed-count-reached":
+            result = dict(result)
+            result["stop_reason"] = "固定枚数に到達"
         super().on_capture_completed(result)
 
     def reset_buttons(self):
@@ -401,38 +373,6 @@ class MainWindow(V5MainWindow):
         self._countdown_active = False
         self._countdown_token += 1
         super().on_failed(detail)
-
-    def on_capture_completed(self, result):
-        if self._cancel_without_output:
-            captured_count = int(result.get("pages", 0))
-            image_dir = result.get("image_dir", "")
-            self.append_log(f"キャンセル完了: {captured_count}画面")
-            self.append_log("PDF/OCRは作成していません。")
-            if image_dir:
-                self.append_log(f"撮影済み画像: {image_dir}")
-            self.status_label.setText(
-                f"キャンセル済み — {captured_count}画面保存 / PDF・OCRなし"
-            )
-            self._cancel_without_output = False
-            self.reset_buttons()
-            self._sound()
-            self._bring_notification_forward()
-            QMessageBox.information(
-                self,
-                APP_NAME,
-                f"キャプチャをキャンセルしました。\n\n"
-                f"撮影済み: {captured_count}画面\n"
-                "PDF・OCRは作成していません。\n"
-                "途中までの画像はそのまま残しています。\n\n"
-                f"{image_dir}",
-            )
-            return
-
-        self.cancel_btn.setEnabled(False)
-        reason = result.get("stop_reason")
-        if reason == "fixed-count-reached":
-            self.append_log("キャプチャ終了理由: 固定枚数に到達")
-        super().on_capture_completed(result)
 
 
 def run_self_test(output_path: str) -> int:
