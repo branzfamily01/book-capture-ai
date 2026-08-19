@@ -1,7 +1,7 @@
 {
+  "run_id": 32260553779,
   "artifact": "BookCaptureAI-Windows-v0.5.6-Capture-Notice",
+  "commit": "560689f51f74283290f73fe140e9a3b3954ef2de",
   "version": "0.5.6",
-  "commit": "a25f82a090ec67a9e4a7e478a1ffcd6033d0b16a",
-  "status": "running",
-  "run_id": 32260390199
+  "status": "running"
 }
