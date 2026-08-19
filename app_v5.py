@@ -11,7 +11,7 @@ import winsound
 from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QThread, Signal, QAbstractNativeEventFilter
+from PySide6.QtCore import Qt, QPoint, QThread, Signal, QAbstractNativeEventFilter, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,8 +32,9 @@ from pdf_tools import build_outputs, configure_tesseract, make_image_pdf, make_o
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5.4"
+VERSION = "0.5.5"
 
+HOTKEY_START_ID = 0xBC80
 HOTKEY_PAUSE_ID = 0xBC81
 HOTKEY_FINISH_ID = 0xBC82
 WM_HOTKEY = 0x0312
@@ -176,32 +177,39 @@ class MainWindow(V4MainWindow):
         # Insert after v0.4 spread-split settings and before fixed controls.
         main.insertWidget(6, clean_box)
         self._make_layout_responsive()
-        self.hotkey_help = QLabel("全画面操作: F8 一時停止／再開　｜　F9を2回 終了してPDF作成")
+        self.hotkey_help = QLabel(
+            "全画面操作: F7 3秒後に開始　｜　F8 一時停止／再開　｜　F9を2回 終了してPDF作成"
+        )
         self.hotkey_help.setStyleSheet(
             "background:#e8f4ff; color:#174a73; padding:8px; font-weight:600; border-radius:4px;"
         )
         main.insertWidget(1, self.hotkey_help)
         self._finish_hotkey_deadline = 0.0
+        self._start_hotkey_pending = False
 
     def register_global_hotkeys(self):
         if sys.platform != "win32":
             return False
         user32 = ctypes.windll.user32
         no_repeat = 0x4000
+        start_ok = bool(user32.RegisterHotKey(None, HOTKEY_START_ID, no_repeat, 0x76))
         pause_ok = bool(user32.RegisterHotKey(None, HOTKEY_PAUSE_ID, no_repeat, 0x77))
         finish_ok = bool(user32.RegisterHotKey(None, HOTKEY_FINISH_ID, no_repeat, 0x78))
-        if pause_ok and finish_ok:
-            self.append_log("全画面ホットキー: F8 一時停止/再開、F9を2回 終了してPDF作成")
+        if start_ok and pause_ok and finish_ok:
+            self.append_log("全画面ホットキー: F7 3秒後に開始、F8 一時停止/再開、F9を2回 終了")
             return True
+        if start_ok:
+            user32.UnregisterHotKey(None, HOTKEY_START_ID)
         if pause_ok:
             user32.UnregisterHotKey(None, HOTKEY_PAUSE_ID)
         if finish_ok:
             user32.UnregisterHotKey(None, HOTKEY_FINISH_ID)
-        self.append_log("警告: F8/F9が他のアプリで使用中のため登録できませんでした。")
+        self.append_log("警告: F7/F8/F9が他のアプリで使用中のため登録できませんでした。")
         return False
 
     def unregister_global_hotkeys(self):
         if sys.platform == "win32":
+            ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_START_ID)
             ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_PAUSE_ID)
             ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_FINISH_ID)
 
@@ -221,6 +229,21 @@ class MainWindow(V4MainWindow):
 
     def handle_global_hotkey(self, hotkey_id):
         worker = getattr(self, "capture_thread", None)
+        if hotkey_id == HOTKEY_START_ID:
+            if worker and worker.isRunning():
+                self._sound()
+                return
+            if self._start_hotkey_pending:
+                return
+            self._start_hotkey_pending = True
+            self.append_log("F7: 3秒後にキャプチャを開始します。マウスを動かさないでください。")
+            self.status_label.setText("3秒後に開始 — Kindleの上下バーが消えるまでマウスを動かさないでください")
+            self._sound()
+            QTimer.singleShot(1000, lambda: self.status_label.setText("開始まで 2秒"))
+            QTimer.singleShot(2000, lambda: self.status_label.setText("開始まで 1秒"))
+            QTimer.singleShot(3000, self._complete_hotkey_start)
+            return
+
         if hotkey_id == HOTKEY_PAUSE_ID:
             if not worker or not worker.isRunning():
                 self._sound()
@@ -247,6 +270,16 @@ class MainWindow(V4MainWindow):
                 self.stop_capture()
                 self._sound()
                 self.append_log("F9: キャプチャを終了してPDF作成へ進みます")
+
+    def _complete_hotkey_start(self):
+        if not self._start_hotkey_pending:
+            return
+        self._start_hotkey_pending = False
+        worker = getattr(self, "capture_thread", None)
+        if worker and worker.isRunning():
+            return
+        self.append_log("F7: キャプチャ開始")
+        self.start_capture()
 
     def _make_layout_responsive(self):
         """Scroll settings while keeping capture controls permanently visible."""
@@ -534,6 +567,11 @@ def run_self_test(output_path: str) -> int:
             report["checks"]["same_screen_minimum"] = win.same_limit.minimum()
             report["checks"]["same_screen_value"] = win.same_limit.value()
             report["checks"]["hotkey_help_visible"] = win.hotkey_help.isVisible()
+            hotkey_start_actions = []
+            win.start_capture = lambda: hotkey_start_actions.append("start")
+            win._start_hotkey_pending = True
+            win._complete_hotkey_start()
+            report["checks"]["hotkey_start_actions"] = hotkey_start_actions
             class FakeCaptureThread:
                 def __init__(self):
                     self.actions = []
@@ -586,6 +624,7 @@ def run_self_test(output_path: str) -> int:
                 and report["checks"]["same_screen_minimum"] == 3
                 and report["checks"]["same_screen_value"] >= 3
                 and report["checks"]["hotkey_help_visible"]
+                and report["checks"]["hotkey_start_actions"] == ["start"]
                 and report["checks"]["hotkey_actions"] == ["pause", "resume", "stop"]
                 and report["checks"]["settings_scroll_exists"]
                 and report["checks"]["start_button_visible_600px"]
