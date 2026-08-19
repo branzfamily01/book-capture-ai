@@ -21,6 +21,7 @@ PAGE_KEY_VK = {
     "pagedown": 0x22,  # VK_NEXT
 }
 KEYEVENTF_KEYUP = 0x0002
+CAPTURE_MODES = {"auto", "fixed"}
 
 
 @dataclass
@@ -34,6 +35,7 @@ class CaptureConfig:
     diff_threshold: float = 1.8
     same_limit: int = 3
     output_dir: Path = Path("capture-output")
+    capture_mode: str = "auto"  # auto: end detection, fixed: exact number of screenshots
 
 
 def list_windows(exclude_contains=None) -> List[str]:
@@ -81,7 +83,7 @@ def image_difference_score(a: Image.Image, b: Image.Image) -> float:
     """Measure both whole-screen and localized content changes.
 
     A whole-screen mean misses Kindle pages where only a small text or table
-    area changes against a large white background.  The average of the eight
+    area changes against a large white background. The average of the eight
     most-changed tiles detects those real page turns while ignoring a cursor or
     caret confined to one tile.
     """
@@ -217,16 +219,152 @@ class CaptureEngine:
         self.log("警告: ページ表示の完全な安定を確認できなかったため、最新フレームを保存します。")
         return previous
 
+    def _emit_progress(self, page_count: int, path: Path):
+        if self.on_progress:
+            self.on_progress(page_count, str(path))
+
+    def _run_fixed_count(self, sct: mss.mss, image_dir: Path, first: Image.Image):
+        """Capture exactly max_pages screenshots unless the user stops manually.
+
+        In this mode the visual-difference detector is diagnostic only. One key
+        press produces one saved screenshot, so a sparse Kindle page cannot
+        trigger an erroneous end-of-book stop or an extra retry that skips a
+        page.
+        """
+        target_count = max(1, int(self.config.max_pages))
+        page_count = 1
+        prev = first
+        path = self.save_image(first, image_dir, page_count)
+        self._emit_progress(page_count, path)
+
+        while page_count < target_count and not self._stop.is_set():
+            self.wait_if_paused()
+            if self._stop.is_set():
+                break
+
+            remaining = target_count - page_count
+            self.status(
+                f"固定枚数モード: {page_count}/{target_count}画面取得済み — 残り{remaining}画面"
+            )
+            self.activate_target()
+            send_page_turn_key(self.config.turn_key)
+
+            stable = self.wait_for_stable_frame(sct)
+            if self._stop.is_set():
+                break
+
+            score = image_difference_score(prev, stable)
+            if score < self.config.diff_threshold:
+                self.log(
+                    f"警告: 前の画面との差が小さいです score={score:.2f}。"
+                    "固定枚数モードのため停止せず、この画面を保存して続行します。"
+                )
+            else:
+                self.log(f"画面変化確認: score={score:.2f}")
+
+            page_count += 1
+            path = self.save_image(stable, image_dir, page_count)
+            prev = stable
+            self._emit_progress(page_count, path)
+
+        if self._stop.is_set():
+            stop_reason = "manual-stop"
+        else:
+            stop_reason = "fixed-count-reached"
+        return page_count, stop_reason
+
+    def _run_auto(self, sct: mss.mss, image_dir: Path, first: Image.Image):
+        """Existing Smart Guard end-detection mode."""
+        same_count = 0
+        effective_same_limit = max(3, self.config.same_limit)
+        stop_reason = "maximum-pages" if self.config.max_pages <= 1 else "completed"
+        page_count = 1
+        prev = first
+        path = self.save_image(first, image_dir, page_count)
+        self._emit_progress(page_count, path)
+
+        while page_count < self.config.max_pages and not self._stop.is_set():
+            self.wait_if_paused()
+            if self._stop.is_set():
+                break
+
+            self.status(f"{page_count}ページ取得済み — 次ページへ")
+            self.activate_target()
+            send_page_turn_key(self.config.turn_key)
+
+            changed = False
+            start = time.time()
+            candidate = None
+
+            while time.time() - start < self.config.change_timeout:
+                if self._stop.is_set():
+                    break
+                self.wait_if_paused()
+                time.sleep(0.12)
+                candidate = self.capture(sct)
+                score = image_difference_score(prev, candidate)
+                if score >= self.config.diff_threshold:
+                    changed = True
+                    self.log(f"画面変化検出: score={score:.2f}")
+                    break
+
+            if self._stop.is_set():
+                break
+
+            if not changed:
+                same_count += 1
+                self.log(
+                    f"画面変化なし — ページ送りを再試行します "
+                    f"({same_count}/{effective_same_limit})"
+                )
+                if same_count >= effective_same_limit:
+                    self.status("同じ画面が続いたため自動停止")
+                    stop_reason = "same-screen-limit"
+                    break
+                continue
+
+            stable = self.wait_for_stable_frame(sct)
+            final_score = image_difference_score(prev, stable)
+
+            if final_score < self.config.diff_threshold:
+                same_count += 1
+                self.log(
+                    f"安定後に前ページとほぼ同一: score={final_score:.2f} "
+                    f"({same_count}/{effective_same_limit})"
+                )
+                if same_count >= effective_same_limit:
+                    self.status("同じ画面が続いたため自動停止")
+                    stop_reason = "same-screen-limit"
+                    break
+                continue
+
+            same_count = 0
+            page_count += 1
+            path = self.save_image(stable, image_dir, page_count)
+            prev = stable
+            self._emit_progress(page_count, path)
+
+        if self._stop.is_set():
+            stop_reason = "manual-stop"
+        elif page_count >= self.config.max_pages:
+            stop_reason = "maximum-pages"
+        return page_count, stop_reason
+
     def run(self):
         output_dir = Path(self.config.output_dir)
         image_dir = output_dir / "images"
         image_dir.mkdir(parents=True, exist_ok=True)
+
+        capture_mode = (self.config.capture_mode or "auto").strip().lower()
+        if capture_mode not in CAPTURE_MODES:
+            raise ValueError(f"未対応のキャプチャ終了モードです: {self.config.capture_mode}")
 
         metadata = {
             "window_title": self.config.window_title,
             "region": list(self.config.region),
             "turn_key": self.config.turn_key,
             "max_pages": self.config.max_pages,
+            "capture_mode": capture_mode,
             "settle_delay": self.config.settle_delay,
             "change_timeout": self.config.change_timeout,
             "diff_threshold": self.config.diff_threshold,
@@ -241,92 +379,28 @@ class CaptureEngine:
         self.activate_target()
         time.sleep(0.5)
 
-        same_count = 0
-        # A saved value of 1 can stop a long capture on one sparse/slow page.
-        # Always retry at least three turns before deciding the book ended.
-        effective_same_limit = max(3, self.config.same_limit)
-        stop_reason = "maximum-pages" if self.config.max_pages <= 1 else "completed"
-        page_count = 0
-        prev = None
-
         with mss.mss() as sct:
             self.wait_if_paused()
             if self._stop.is_set():
-                return {"pages": 0, "image_dir": str(image_dir)}
+                return {
+                    "pages": 0,
+                    "image_dir": str(image_dir),
+                    "stop_reason": "manual-stop",
+                    "capture_mode": capture_mode,
+                }
 
             first = self.capture(sct)
-            page_count = 1
-            path = self.save_image(first, image_dir, page_count)
-            prev = first
-            if self.on_progress:
-                self.on_progress(page_count, str(path))
-
-            while page_count < self.config.max_pages and not self._stop.is_set():
-                self.wait_if_paused()
-                if self._stop.is_set():
-                    break
-
-                self.status(f"{page_count}ページ取得済み — 次ページへ")
-                self.activate_target()
-                send_page_turn_key(self.config.turn_key)
-
-                changed = False
-                start = time.time()
-                candidate = None
-
-                while time.time() - start < self.config.change_timeout:
-                    if self._stop.is_set():
-                        break
-                    self.wait_if_paused()
-                    time.sleep(0.12)
-                    candidate = self.capture(sct)
-                    score = image_difference_score(prev, candidate)
-                    if score >= self.config.diff_threshold:
-                        changed = True
-                        self.log(f"画面変化検出: score={score:.2f}")
-                        break
-
-                if self._stop.is_set():
-                    break
-
-                if not changed:
-                    same_count += 1
-                    self.log(
-                        f"画面変化なし — ページ送りを再試行します "
-                        f"({same_count}/{effective_same_limit})"
-                    )
-                    if same_count >= effective_same_limit:
-                        self.status("同じ画面が続いたため自動停止")
-                        stop_reason = "same-screen-limit"
-                        break
-                    continue
-
-                stable = self.wait_for_stable_frame(sct)
-                final_score = image_difference_score(prev, stable)
-
-                if final_score < self.config.diff_threshold:
-                    same_count += 1
-                    self.log(
-                        f"安定後に前ページとほぼ同一: score={final_score:.2f} "
-                        f"({same_count}/{effective_same_limit})"
-                    )
-                    if same_count >= effective_same_limit:
-                        self.status("同じ画面が続いたため自動停止")
-                        stop_reason = "same-screen-limit"
-                        break
-                    continue
-
-                same_count = 0
-                page_count += 1
-                path = self.save_image(stable, image_dir, page_count)
-                prev = stable
-                if self.on_progress:
-                    self.on_progress(page_count, str(path))
+            if capture_mode == "fixed":
+                page_count, stop_reason = self._run_fixed_count(sct, image_dir, first)
+            else:
+                page_count, stop_reason = self._run_auto(sct, image_dir, first)
 
         self.status("キャプチャ終了")
-        if self._stop.is_set():
-            stop_reason = "manual-stop"
-        elif page_count >= self.config.max_pages:
-            stop_reason = "maximum-pages"
         self.log(f"終了理由: {stop_reason}")
-        return {"pages": page_count, "image_dir": str(image_dir), "stop_reason": stop_reason}
+        return {
+            "pages": page_count,
+            "image_dir": str(image_dir),
+            "stop_reason": stop_reason,
+            "capture_mode": capture_mode,
+            "target_count": int(self.config.max_pages),
+        }
