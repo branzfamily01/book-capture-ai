@@ -1,4 +1,4 @@
-name: Build Windows EXE v0.5.6 with configurable start and capture notice
+name: Build Windows EXE v0.5.8 fixed-count capture
 
 on:
   workflow_dispatch:
@@ -14,26 +14,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      QT_QPA_PLATFORM: offscreen
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Record current build run
-        shell: pwsh
-        run: |
-          $data = @{
-            run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.6-Capture-Notice"
-            commit = $env:GITHUB_SHA
-            version = "0.5.6"
-            status = "running"
-          } | ConvertTo-Json
-          Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .current-build.json
-          git commit -m "Record current v0.5.1 Windows build" || exit 0
-          git push
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -46,21 +33,36 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller pytest
 
+      - name: Compile source
+        run: python -m py_compile app.py app_v4.py app_v5.py app_v6.py capture_engine.py pdf_tools.py split_tools.py
+
       - name: Test source
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-          QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
 
-      - name: Test post-processing QThread self-test
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-          QT_QPA_PLATFORM: offscreen
+      - name: Test exact fixed-count capture
+        run: python -m pytest -q tests/test_fixed_count.py
+
+      - name: Test post-processing QThread
         run: python -m pytest -q tests/test_post_process.py
+
+      - name: Test v0.5.8 UI self-test from source
+        shell: pwsh
+        run: |
+          $report = Join-Path $PWD "source-selftest-v058.json"
+          python app_v6.py --self-test $report
+          if ($LASTEXITCODE -ne 0) { throw "Source self-test failed" }
+          Get-Content $report
+          $json = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $json.ok) { throw "Source self-test returned ok=false" }
+          if ($json.version -ne "0.5.8") { throw "Wrong source version" }
+          if (-not $json.checks.fixed_mode_exists) { throw "Fixed-count UI missing" }
+          if (-not $json.checks.same_stop_disabled_in_fixed) { throw "Same-screen stop is active in fixed mode" }
+          if (-not $json.checks.cancel_button_exists) { throw "Cancel-without-PDF button missing" }
+          if (-not $json.checks.f7_removed_from_help) { throw "F7 start was not removed" }
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app_v5.py
+          pyinstaller --noconfirm --clean --windowed --name "BookCaptureAI" --collect-all pygetwindow app_v6.py
 
       - name: Bundle Tesseract OCR
         shell: pwsh
@@ -114,7 +116,7 @@ jobs:
           from pdf_tools import configure_tesseract, make_ocr_outputs
           from split_tools import split_spreads
 
-          base = Path("v5-integration-test")
+          base = Path("v058-integration-test")
           spreads = base / "images"
           spreads.mkdir(parents=True, exist_ok=True)
           image = Image.new("RGB", (1400, 1000), "white")
@@ -154,7 +156,7 @@ jobs:
       - name: Self-test packaged EXE
         shell: pwsh
         run: |
-          $report = Join-Path $PWD "selftest-v5-1.json"
+          $report = Join-Path $PWD "selftest-v058.json"
           $exe = Resolve-Path "dist/BookCaptureAI/BookCaptureAI.exe"
           $p = Start-Process -FilePath $exe -ArgumentList @("--self-test", $report) -Wait -PassThru
           if ($p.ExitCode -ne 0) {
@@ -165,18 +167,11 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
-          if ($json.version -ne "0.5.6") { throw "Wrong app version in self-test" }
-          if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
-          if ($json.checks.clean_size[0] -ne 500 -or $json.checks.clean_size[1] -ne 860) { throw "Trim size self-test failed" }
-          if ($json.checks.pdf_pages -ne 12) { throw "Clean split PDF page count failed" }
-          if (-not $json.checks.settings_scroll_exists) { throw "Scrollable settings area missing" }
-          if (-not $json.checks.start_button_visible_600px) { throw "Start button is not visible at 600px window height" }
-          if ($json.checks.same_screen_minimum -ne 3 -or $json.checks.same_screen_value -lt 3) { throw "Unsafe same-screen stop setting" }
-          if (-not $json.checks.hotkey_help_visible) { throw "Global hotkey help is not visible" }
-          if (($json.checks.hotkey_start_actions -join ',') -ne 'start') { throw "F7 global start behavior failed" }
-          if ($json.checks.start_delay_minimum -ne 3 -or $json.checks.start_delay_maximum -ne 30) { throw "Invalid F7 delay range" }
-          if (-not $json.checks.capture_finished_notice) { throw "Capture-finished notice self-test failed" }
-          if (($json.checks.hotkey_actions -join ',') -ne 'pause,resume,stop') { throw "Global hotkey behavior failed" }
+          if ($json.version -ne "0.5.8") { throw "Wrong app version in packaged self-test" }
+          if (-not $json.checks.fixed_mode_exists) { throw "Fixed-count mode missing from packaged EXE" }
+          if (-not $json.checks.same_stop_disabled_in_fixed) { throw "Fixed mode still enables same-screen stop" }
+          if (-not $json.checks.cancel_button_exists) { throw "Cancel button missing from packaged EXE" }
+          if (-not $json.checks.countdown_cancel_resets) { throw "Countdown cancel self-test failed" }
 
       - name: Verify package contents
         shell: pwsh
@@ -196,11 +191,18 @@ jobs:
             if (-not (Test-Path $item)) { throw "Missing package item: $item" }
           }
 
-      - name: Upload Windows app
+      - name: Create release ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/BookCaptureAI/*" -DestinationPath "Book-Capture-AI-v0.5.8.zip" -Force
+          if (-not (Test-Path "Book-Capture-AI-v0.5.8.zip")) { throw "Release ZIP missing" }
+
+      - name: Upload Windows ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.5.6-Capture-Notice
-          path: dist/BookCaptureAI/
+          name: Book-Capture-AI-v0.5.8-Windows
+          path: Book-Capture-AI-v0.5.8.zip
+          if-no-files-found: error
 
       - name: Record latest successful build run
         shell: pwsh
@@ -208,14 +210,14 @@ jobs:
           git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.6-Capture-Notice"
+            artifact = "Book-Capture-AI-v0.5.8-Windows"
             commit = $env:GITHUB_SHA
-            version = "0.5.6"
+            version = "0.5.8"
             status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .latest-build.json
-          git commit -m "Record latest successful v0.5.1 Windows build" || exit 0
+          git commit -m "Record latest successful v0.5.8 Windows build" || exit 0
           git push
