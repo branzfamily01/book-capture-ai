@@ -14,7 +14,7 @@ if (-not (Test-Path ".venv")) {
   --windowed `
   --name "BookCaptureAI" `
   --collect-all pygetwindow `
-  app.py
+  app_v6.py
 
 Write-Host ""
 Write-Host "Build complete: dist\BookCaptureAI\"
