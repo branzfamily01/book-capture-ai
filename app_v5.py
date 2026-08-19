@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -32,7 +33,7 @@ from pdf_tools import build_outputs, configure_tesseract, make_image_pdf, make_o
 from split_tools import split_spreads, trim_pages
 
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 
 HOTKEY_START_ID = 0xBC80
 HOTKEY_PAUSE_ID = 0xBC81
@@ -173,12 +174,19 @@ class MainWindow(V4MainWindow):
         grid.addWidget(self.trim_footer, 1, 0)
         grid.addWidget(self.footer_pct, 1, 1)
         grid.addWidget(explain, 2, 0, 1, 2)
+        self.start_delay_seconds = QSpinBox()
+        self.start_delay_seconds.setRange(3, 30)
+        self.start_delay_seconds.setValue(8)
+        self.start_delay_seconds.setSuffix(" 秒")
+        self.start_delay_seconds.setToolTip("F7を押してからキャプチャを始めるまでの待ち時間")
+        grid.addWidget(QLabel("F7開始までの待ち時間"), 3, 0)
+        grid.addWidget(self.start_delay_seconds, 3, 1)
 
         # Insert after v0.4 spread-split settings and before fixed controls.
         main.insertWidget(6, clean_box)
         self._make_layout_responsive()
         self.hotkey_help = QLabel(
-            "全画面操作: F7 3秒後に開始　｜　F8 一時停止／再開　｜　F9を2回 終了してPDF作成"
+            "全画面操作: F7 設定秒数後に開始　｜　F8 一時停止／再開　｜　F9を2回 終了してPDF作成"
         )
         self.hotkey_help.setStyleSheet(
             "background:#e8f4ff; color:#174a73; padding:8px; font-weight:600; border-radius:4px;"
@@ -196,7 +204,7 @@ class MainWindow(V4MainWindow):
         pause_ok = bool(user32.RegisterHotKey(None, HOTKEY_PAUSE_ID, no_repeat, 0x77))
         finish_ok = bool(user32.RegisterHotKey(None, HOTKEY_FINISH_ID, no_repeat, 0x78))
         if start_ok and pause_ok and finish_ok:
-            self.append_log("全画面ホットキー: F7 3秒後に開始、F8 一時停止/再開、F9を2回 終了")
+            self.append_log("全画面ホットキー: F7 遅延開始、F8 一時停止/再開、F9を2回 終了")
             return True
         if start_ok:
             user32.UnregisterHotKey(None, HOTKEY_START_ID)
@@ -236,12 +244,19 @@ class MainWindow(V4MainWindow):
             if self._start_hotkey_pending:
                 return
             self._start_hotkey_pending = True
-            self.append_log("F7: 3秒後にキャプチャを開始します。マウスを動かさないでください。")
-            self.status_label.setText("3秒後に開始 — Kindleの上下バーが消えるまでマウスを動かさないでください")
+            delay = self.start_delay_seconds.value()
+            self.append_log(f"F7: {delay}秒後にキャプチャを開始します。マウスを動かさないでください。")
+            self.status_label.setText(
+                f"{delay}秒後に開始 — Kindleの上下バーが消えるまでマウスを動かさないでください"
+            )
             self._sound()
-            QTimer.singleShot(1000, lambda: self.status_label.setText("開始まで 2秒"))
-            QTimer.singleShot(2000, lambda: self.status_label.setText("開始まで 1秒"))
-            QTimer.singleShot(3000, self._complete_hotkey_start)
+            for elapsed in range(1, delay):
+                remaining = delay - elapsed
+                QTimer.singleShot(
+                    elapsed * 1000,
+                    lambda seconds=remaining: self.status_label.setText(f"開始まで {seconds}秒"),
+                )
+            QTimer.singleShot(delay * 1000, self._complete_hotkey_start)
             return
 
         if hotkey_id == HOTKEY_PAUSE_ID:
@@ -321,6 +336,7 @@ class MainWindow(V4MainWindow):
         self.trim_footer.setChecked(self.settings.value("trim_footer", True, type=bool))
         self.header_pct.setValue(float(self.settings.value("header_pct", 8.0)))
         self.footer_pct.setValue(float(self.settings.value("footer_pct", 6.0)))
+        self.start_delay_seconds.setValue(int(self.settings.value("start_delay_seconds", 8)))
 
     def save_settings(self):
         super().save_settings()
@@ -329,6 +345,7 @@ class MainWindow(V4MainWindow):
             self.settings.setValue("trim_footer", self.trim_footer.isChecked())
             self.settings.setValue("header_pct", self.header_pct.value())
             self.settings.setValue("footer_pct", self.footer_pct.value())
+            self.settings.setValue("start_delay_seconds", self.start_delay_seconds.value())
 
     def _crop_values(self):
         top = self.header_pct.value() if self.trim_header.isChecked() else 0.0
@@ -451,6 +468,25 @@ class MainWindow(V4MainWindow):
         self.post_process_thread.failed.connect(self.on_post_process_failed)
         self.post_process_thread.completed.connect(self.on_post_process_completed)
         self.post_process_thread.start()
+        self._show_capture_finished_notice(captured_count)
+
+    def _show_capture_finished_notice(self, captured_count):
+        """Tell the user immediately that Kindle and the PC are safe to operate."""
+        self._sound()
+        self._bring_notification_forward()
+        notice = QMessageBox(self)
+        notice.setIcon(QMessageBox.Information)
+        notice.setWindowTitle(APP_NAME)
+        notice.setText("スクリーンショットが終了しました。画面を動かしてOKです。")
+        notice.setInformativeText(
+            f"{captured_count}画面を保存しました。\n"
+            "ここからPDF・OCR処理はバックグラウンドで続きます。パソコンを操作して構いません。"
+        )
+        notice.setStandardButtons(QMessageBox.Ok)
+        notice.setModal(False)
+        notice.finished.connect(lambda _result: setattr(self, "_capture_finished_notice", None))
+        self._capture_finished_notice = notice
+        notice.show()
 
     def on_post_process_progress(self, current, total, message):
         self.progress.setRange(0, max(total, 1))
@@ -567,6 +603,9 @@ def run_self_test(output_path: str) -> int:
             report["checks"]["same_screen_minimum"] = win.same_limit.minimum()
             report["checks"]["same_screen_value"] = win.same_limit.value()
             report["checks"]["hotkey_help_visible"] = win.hotkey_help.isVisible()
+            report["checks"]["start_delay_minimum"] = win.start_delay_seconds.minimum()
+            report["checks"]["start_delay_maximum"] = win.start_delay_seconds.maximum()
+            report["checks"]["start_delay_value"] = win.start_delay_seconds.value()
             hotkey_start_actions = []
             win.start_capture = lambda: hotkey_start_actions.append("start")
             win._start_hotkey_pending = True
@@ -589,6 +628,14 @@ def run_self_test(output_path: str) -> int:
             fake_capture = FakeCaptureThread()
             win.capture_thread = fake_capture
             win._sound = lambda *_args: None
+            win._bring_notification_forward = lambda: None
+            win._show_capture_finished_notice(12)
+            qt_app.processEvents()
+            report["checks"]["capture_finished_notice"] = (
+                "画面を動かしてOK" in win._capture_finished_notice.text()
+                and "バックグラウンド" in win._capture_finished_notice.informativeText()
+            )
+            win._capture_finished_notice.close()
             win.pause_btn.setEnabled(True)
             win.resume_btn.setEnabled(False)
             win.stop_btn.setEnabled(True)
@@ -624,8 +671,12 @@ def run_self_test(output_path: str) -> int:
                 and report["checks"]["same_screen_minimum"] == 3
                 and report["checks"]["same_screen_value"] >= 3
                 and report["checks"]["hotkey_help_visible"]
+                and report["checks"]["start_delay_minimum"] == 3
+                and report["checks"]["start_delay_maximum"] == 30
+                and 3 <= report["checks"]["start_delay_value"] <= 30
                 and report["checks"]["hotkey_start_actions"] == ["start"]
                 and report["checks"]["hotkey_actions"] == ["pause", "resume", "stop"]
+                and report["checks"]["capture_finished_notice"]
                 and report["checks"]["settings_scroll_exists"]
                 and report["checks"]["start_button_visible_600px"]
             )

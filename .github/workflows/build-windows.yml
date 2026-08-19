@@ -1,4 +1,4 @@
-name: Build Windows EXE v0.5.5 with full-screen start control
+name: Build Windows EXE v0.5.6 with configurable start and capture notice
 
 on:
   workflow_dispatch:
@@ -23,9 +23,9 @@ jobs:
         run: |
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.5-Fullscreen-Start"
+            artifact = "BookCaptureAI-Windows-v0.5.6-Capture-Notice"
             commit = $env:GITHUB_SHA
-            version = "0.5.5"
+            version = "0.5.6"
             status = "running"
           } | ConvertTo-Json
           Set-Content -Path ".current-build.json" -Value $data -Encoding UTF8
@@ -165,7 +165,7 @@ jobs:
           Get-Content $report
           $json = Get-Content $report -Raw | ConvertFrom-Json
           if (-not $json.ok) { throw "Self-test returned ok=false" }
-          if ($json.version -ne "0.5.5") { throw "Wrong app version in self-test" }
+          if ($json.version -ne "0.5.6") { throw "Wrong app version in self-test" }
           if ($json.checks.split_pages -ne 12) { throw "Spread split self-test failed" }
           if ($json.checks.clean_size[0] -ne 500 -or $json.checks.clean_size[1] -ne 860) { throw "Trim size self-test failed" }
           if ($json.checks.pdf_pages -ne 12) { throw "Clean split PDF page count failed" }
@@ -174,6 +174,8 @@ jobs:
           if ($json.checks.same_screen_minimum -ne 3 -or $json.checks.same_screen_value -lt 3) { throw "Unsafe same-screen stop setting" }
           if (-not $json.checks.hotkey_help_visible) { throw "Global hotkey help is not visible" }
           if (($json.checks.hotkey_start_actions -join ',') -ne 'start') { throw "F7 global start behavior failed" }
+          if ($json.checks.start_delay_minimum -ne 3 -or $json.checks.start_delay_maximum -ne 30) { throw "Invalid F7 delay range" }
+          if (-not $json.checks.capture_finished_notice) { throw "Capture-finished notice self-test failed" }
           if (($json.checks.hotkey_actions -join ',') -ne 'pause,resume,stop') { throw "Global hotkey behavior failed" }
 
       - name: Verify package contents
@@ -197,7 +199,7 @@ jobs:
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: BookCaptureAI-Windows-v0.5.5-Fullscreen-Start
+          name: BookCaptureAI-Windows-v0.5.6-Capture-Notice
           path: dist/BookCaptureAI/
 
       - name: Record latest successful build run
@@ -206,9 +208,9 @@ jobs:
           git pull --rebase
           $data = @{
             run_id = [int64]$env:GITHUB_RUN_ID
-            artifact = "BookCaptureAI-Windows-v0.5.5-Fullscreen-Start"
+            artifact = "BookCaptureAI-Windows-v0.5.6-Capture-Notice"
             commit = $env:GITHUB_SHA
-            version = "0.5.5"
+            version = "0.5.6"
             status = "success"
           } | ConvertTo-Json
           Set-Content -Path ".latest-build.json" -Value $data -Encoding UTF8
