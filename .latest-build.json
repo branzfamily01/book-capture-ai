@@ -1,7 +1,7 @@
 {
-  "version": "0.5.4",
-  "commit": "75df057585644a96c30e4513b64842b8a914eb09",
-  "run_id": 32146072416,
-  "artifact": "BookCaptureAI-Windows-v0.5.4-Global-Controls-Alerts",
-  "status": "success"
+  "artifact": "BookCaptureAI-Windows-v0.5.5-Fullscreen-Start",
+  "version": "0.5.5",
+  "commit": "40f9bdaa83ea4985c63aa44d2cdd181e09f51a94",
+  "status": "success",
+  "run_id": 32212877170
 }
